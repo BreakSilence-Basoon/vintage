@@ -22,7 +22,7 @@ export async function prepareRestoredDatabase(source, destination) {
     db.exec('BEGIN IMMEDIATE');
     try {
       const version = db.prepare('PRAGMA user_version').get().user_version;
-      if (![11, 12, 13].includes(version)) throw new Error('Unsupported backup version');
+      if (![11, 12, 13, 14].includes(version)) throw new Error('Unsupported backup version');
       createTimetableStore(db);
       if (version === 11) db.exec(restorePreparationSchema);
       if (version <= 12) db.exec(recoveryGuardSchema);

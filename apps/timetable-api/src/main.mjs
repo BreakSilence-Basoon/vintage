@@ -58,7 +58,7 @@ export function prepareService(env, { browserAuth = null } = {}) {
     const readSchedule = createOwnScheduleHandler({ ...store, verifyAuthorization });
     const version = db.prepare('PRAGMA user_version').get().user_version;
     if (version >= 13 && db.prepare('SELECT status FROM recovery_guard WHERE id = 1').get()?.status === 'pending') throw new Error('Recovery authority review required');
-    if (allowWrites && ![3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13].includes(version)) throw new Error('Migration required');
+    if (allowWrites && ![3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14].includes(version)) throw new Error('Migration required');
     const write = allowWrites ? createAdminHandler({ db, verifyWriteAuthorization }) : null;
     const listSchedules = allowWrites ? createAdminScheduleList({ db, verifyWriteAuthorization }) : null;
     const listStaff = allowWrites ? createAdminStaffList({ db, verifyWriteAuthorization }) : null;

@@ -14,7 +14,7 @@ function transaction(db, operation) {
     db.exec('BEGIN IMMEDIATE');
     begun = true;
     const version = db.prepare('PRAGMA user_version').get().user_version;
-    if (![11, 12, 13].includes(version)) throw new Error('Invalid version');
+    if (![11, 12, 13, 14].includes(version)) throw new Error('Invalid version');
     if (version >= 13 && db.prepare('SELECT status FROM recovery_guard WHERE id = 1').get()?.status === 'pending') throw new Error('Recovery authority review required');
     const result = operation();
     if (result && typeof result.then === 'function') throw new Error('Asynchronous operation');

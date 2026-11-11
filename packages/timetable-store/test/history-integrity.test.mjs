@@ -61,7 +61,7 @@ test('concurrent overlapping writes cannot both commit', async () => {
     await setup(path, temp);
     const moduleUrl = new URL('../src/admin.mjs', import.meta.url).href;
     const program = `import { DatabaseSync } from 'node:sqlite'; import { applyAuthenticatedOperation } from ${JSON.stringify(moduleUrl)};
-      const db = new DatabaseSync(process.argv[1]);
+      const db = new DatabaseSync(process.argv[1]); db.exec('PRAGMA busy_timeout=2000');
       try { applyAuthenticatedOperation(db, { issuer: 'https://identity.example.invalid', subject: 'example-admin' }, 'add-history',
         { staffId: 'admin-a', recordId: process.argv[2], startsAt: '2026-01-01T09:00:00.000Z', endsAt: null }); process.stdout.write('ok'); }
       catch { process.stdout.write('denied'); } finally { db.close(); }`;

@@ -57,7 +57,7 @@ test('schedule creation isolates tenants, rejects conflicts and records the acto
     db.close();
     const moduleUrl = new URL('../src/admin.mjs', import.meta.url).href;
     const program = `import { DatabaseSync } from 'node:sqlite'; import { applyAuthenticatedOperation } from ${JSON.stringify(moduleUrl)};
-      const db = new DatabaseSync(process.argv[1]);
+      const db = new DatabaseSync(process.argv[1]); db.exec('PRAGMA busy_timeout=2000');
       try { applyAuthenticatedOperation(db, { issuer: 'https://identity.example.invalid', subject: 'example-admin' }, 'add-shift',
         { shiftId: process.argv[2], staffId: 'admin-a', locationId: 'location-a', startsAt: '2026-01-04T09:00:00.000Z', endsAt: '2026-01-04T17:00:00.000Z', graceMinutes: 0 }); process.stdout.write('ok'); }
       catch { process.stdout.write('denied'); } finally { db.close(); }`;
@@ -68,7 +68,8 @@ test('schedule creation isolates tenants, rejects conflicts and records the acto
       child.on('error', fail);
       child.on('close', (code) => code === 0 ? done(output) : fail(new Error('Test worker failed')));
     });
-    assert.deepEqual((await Promise.all([run('race-a'), run('race-b')])).sort(), ['denied', 'ok']);
+    const createOutcomes = await Promise.all([run('race-a'), run('race-b')]);
+    assert.deepEqual(createOutcomes.sort(), ['denied', 'ok']);
     db = new DatabaseSync(path, { readOnly: true });
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM scheduled_shifts').get().n, 3);
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM schedule_create_events').get().n, 4);
@@ -93,7 +94,7 @@ test('schedule creation isolates tenants, rejects conflicts and records the acto
     db.exec('DROP TRIGGER reject_schedule_change');
     db.close();
     const updateProgram = `import { DatabaseSync } from 'node:sqlite'; import { applyAuthenticatedOperation } from ${JSON.stringify(moduleUrl)};
-      const db = new DatabaseSync(process.argv[1]);
+      const db = new DatabaseSync(process.argv[1]); db.exec('PRAGMA busy_timeout=2000');
       try { applyAuthenticatedOperation(db, { issuer: 'https://identity.example.invalid', subject: 'example-admin' }, 'cancel-shift',
         { shiftId: 'shift-a', expectedRevision: 4, reason: 'Example cancellation' }); process.stdout.write('ok'); }
       catch { process.stdout.write('denied'); } finally { db.close(); }`;
@@ -104,7 +105,8 @@ test('schedule creation isolates tenants, rejects conflicts and records the acto
       child.on('error', fail);
       child.on('close', (code) => code === 0 ? done(output) : fail(new Error('Test worker failed')));
     });
-    assert.deepEqual((await Promise.all([runUpdate(), runUpdate()])).sort(), ['denied', 'ok']);
+    const updateOutcomes = await Promise.all([runUpdate(), runUpdate()]);
+    assert.deepEqual(updateOutcomes.sort(), ['denied', 'ok']);
     db = new DatabaseSync(path, { readOnly: true });
     assert.deepEqual({ ...db.prepare('SELECT active, revision FROM scheduled_shifts WHERE id = ?').get('shift-a') }, { active: 0, revision: 5 });
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM schedule_change_events').get().n, 5);
@@ -243,7 +245,7 @@ test('copy keeps provenance, rejects stale and overlapping sources, and makes re
     db.close();
     const moduleUrl = new URL('../src/admin.mjs', import.meta.url).href;
     const program = `import { DatabaseSync } from 'node:sqlite'; import { applyAuthenticatedOperation } from ${JSON.stringify(moduleUrl)};
-      const db = new DatabaseSync(process.argv[1]);
+      const db = new DatabaseSync(process.argv[1]); db.exec('PRAGMA busy_timeout=2000');
       try { applyAuthenticatedOperation(db, { issuer: 'https://identity.example.invalid', subject: 'example-admin' }, 'copy-shift',
         { sourceShiftId: 'source-a', sourceRevision: 2, shiftId: process.argv[2], startsAt: '2026-01-04T09:00:00.000Z', endsAt: '2026-01-04T17:00:00.000Z' }); process.stdout.write('ok'); }
       catch { process.stdout.write('denied'); } finally { db.close(); }`;
@@ -254,7 +256,8 @@ test('copy keeps provenance, rejects stale and overlapping sources, and makes re
       child.on('error', fail);
       child.on('close', (code) => code === 0 ? done(output) : fail(new Error('Test worker failed')));
     });
-    assert.deepEqual((await Promise.all([run('race-copy-a'), run('race-copy-b')])).sort(), ['denied', 'ok']);
+    const outcomes = await Promise.all([run('race-copy-a'), run('race-copy-b')]);
+    assert.deepEqual(outcomes.sort(), ['denied', 'ok']);
     db = new DatabaseSync(path, { readOnly: true });
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM schedule_copy_events').get().n, 2);
   } finally {
