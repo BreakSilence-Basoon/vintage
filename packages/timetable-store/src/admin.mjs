@@ -37,18 +37,46 @@ export function applyAuthenticatedOperation(db, identity, operation, input) {
         !revision(input.expectedRevision) || !reason(input.reason)) throw new AdminRequestError('Invalid request');
   } else if (operation === 'cancel-shift' || operation === 'restore-shift') {
     if (!only(input, ['shiftId', 'expectedRevision', 'reason']) || !id(input.shiftId) || !revision(input.expectedRevision) || !reason(input.reason)) throw new AdminRequestError('Invalid request');
+  } else if (operation === 'copy-shift') {
+    if (!only(input, ['sourceShiftId', 'sourceRevision', 'shiftId', 'startsAt', 'endsAt']) || !id(input.sourceShiftId) ||
+        !revision(input.sourceRevision) || !id(input.shiftId) || !validTimestamp(input.startsAt) || !validTimestamp(input.endsAt) ||
+        input.endsAt <= input.startsAt) throw new AdminRequestError('Invalid request');
   } else throw new AdminRequestError('Invalid request');
   db.exec('PRAGMA foreign_keys = ON');
   const version = db.prepare('PRAGMA user_version').get().user_version;
-  if (![3, 4, 5, 6, 7, 8].includes(version) || (operation === 'close-history' && version < 4) ||
+  if (![3, 4, 5, 6, 7, 8, 9].includes(version) || (operation === 'close-history' && version < 4) ||
       (['add-location', 'add-shift'].includes(operation) && version < 6) ||
-      (['update-shift', 'cancel-shift', 'restore-shift'].includes(operation) && version < 7)) throw new Error('Migration required');
+      (['update-shift', 'cancel-shift', 'restore-shift'].includes(operation) && version < 7) ||
+      (operation === 'copy-shift' && version < 9)) throw new Error('Migration required');
   db.exec('BEGIN IMMEDIATE');
   try {
     const actor = db.prepare("SELECT business_id, staff_id FROM memberships WHERE issuer = ? AND subject = ? AND role = 'ADMIN' AND active = 1")
       .get(identity.issuer, identity.subject);
     if (!actor || !id(actor.business_id) || !id(actor.staff_id)) throw new AdminAccessError('Not authorized');
     const business = actor.business_id;
+    if (operation === 'copy-shift') {
+      const existing = db.prepare('SELECT staff_id,location_id,starts_at,ends_at,grace_minutes,revision,active FROM scheduled_shifts WHERE business_id = ? AND id = ?').get(business, input.shiftId);
+      if (existing) {
+        const event = db.prepare('SELECT source_shift_id,source_revision,target_starts_at,target_ends_at,source_snapshot FROM schedule_copy_events WHERE business_id = ? AND target_shift_id = ?').get(business, input.shiftId);
+        if (!event || event.source_shift_id !== input.sourceShiftId || event.source_revision !== input.sourceRevision ||
+            event.target_starts_at !== input.startsAt || event.target_ends_at !== input.endsAt || existing.starts_at !== input.startsAt ||
+            existing.ends_at !== input.endsAt || existing.revision !== 1 || existing.active !== 1) throw new AdminConflictError('Shift conflicts');
+        const snapshot = JSON.parse(event.source_snapshot);
+        if (snapshot.staff_id !== existing.staff_id || snapshot.location_id !== existing.location_id || snapshot.grace_minutes !== existing.grace_minutes) throw new AdminConflictError('Shift conflicts');
+        db.exec('COMMIT'); return { replayed: true };
+      }
+      const source = db.prepare('SELECT staff_id,location_id,starts_at,ends_at,grace_minutes,revision,active FROM scheduled_shifts WHERE business_id = ? AND id = ?').get(business, input.sourceShiftId);
+      if (!source || source.active !== 1 || source.revision !== input.sourceRevision) throw new AdminConflictError('Shift conflicts');
+      if (!db.prepare('SELECT 1 FROM memberships WHERE business_id = ? AND staff_id = ? AND active = 1').get(business, source.staff_id) ||
+          !db.prepare('SELECT 1 FROM schedule_locations WHERE business_id = ? AND id = ?').get(business, source.location_id)) throw new AdminRequestError('Invalid target');
+      if (db.prepare('SELECT 1 FROM scheduled_shifts WHERE business_id = ? AND staff_id = ? AND active = 1 AND starts_at < ? AND ends_at > ? LIMIT 1')
+        .get(business, source.staff_id, input.endsAt, input.startsAt)) throw new AdminConflictError('Shift conflicts');
+      db.prepare('INSERT INTO scheduled_shifts (business_id,id,staff_id,location_id,starts_at,ends_at,grace_minutes) VALUES (?,?,?,?,?,?,?)')
+        .run(business, input.shiftId, source.staff_id, source.location_id, input.startsAt, input.endsAt, source.grace_minutes);
+      db.prepare('INSERT INTO schedule_copy_events (business_id,actor_staff_id,source_shift_id,source_revision,target_shift_id,target_starts_at,target_ends_at,source_snapshot,created_at) VALUES (?,?,?,?,?,?,?,?,?)')
+        .run(business, actor.staff_id, input.sourceShiftId, input.sourceRevision, input.shiftId, input.startsAt, input.endsAt, JSON.stringify(source), new Date().toISOString());
+      db.exec('COMMIT'); return { replayed: false };
+    }
     if (['update-shift', 'cancel-shift', 'restore-shift'].includes(operation)) {
       const old = db.prepare('SELECT staff_id,location_id,starts_at,ends_at,grace_minutes,revision,active FROM scheduled_shifts WHERE business_id = ? AND id = ?').get(business, input.shiftId);
       if (!old || old.revision !== input.expectedRevision || (operation === 'restore-shift' ? old.active !== 0 : old.active !== 1)) throw new AdminConflictError('Shift conflicts');

@@ -55,7 +55,7 @@ export function prepareService(env, { browserAuth = null } = {}) {
     const read = createHistoryHandler({ ...store, verifyAuthorization });
     const readOwn = createOwnHistoryHandler({ ...store, verifyAuthorization });
     const readSchedule = createOwnScheduleHandler({ ...store, verifyAuthorization });
-    if (allowWrites && ![3, 4, 5, 6, 7, 8].includes(db.prepare('PRAGMA user_version').get().user_version)) throw new Error('Migration required');
+    if (allowWrites && ![3, 4, 5, 6, 7, 8, 9].includes(db.prepare('PRAGMA user_version').get().user_version)) throw new Error('Migration required');
     const write = allowWrites ? createAdminHandler({ db, verifyWriteAuthorization }) : null;
     const listSchedules = allowWrites ? createAdminScheduleList({ db, verifyWriteAuthorization }) : null;
     const handle = async (request) => {

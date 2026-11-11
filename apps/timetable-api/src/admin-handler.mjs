@@ -10,6 +10,7 @@ const routes = new Map([
   ['/v1/admin/shifts/update', 'update-shift'],
   ['/v1/admin/shifts/cancel', 'cancel-shift'],
   ['/v1/admin/shifts/restore', 'restore-shift'],
+  ['/v1/admin/shifts/copy', 'copy-shift'],
 ]);
 const reply = (status, body, extra = {}) => Response.json(body, { status, headers: { 'Cache-Control': 'no-store', ...extra } });
 

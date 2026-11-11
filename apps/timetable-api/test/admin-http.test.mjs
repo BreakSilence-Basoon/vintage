@@ -25,6 +25,7 @@ test('opt-in write HTTP enforces scope, current admin role, tenant and audit', a
     await migrateWithBackup(database, join(temp, 'v5-backup.sqlite'));
     await migrateWithBackup(database, join(temp, 'v6-backup.sqlite'));
     await migrateWithBackup(database, join(temp, 'v7-backup.sqlite'));
+    await migrateWithBackup(database, join(temp, 'v8-backup.sqlite'));
     writer = new DatabaseSync(database);
     writer.prepare('INSERT INTO businesses (id) VALUES (?)').run('shop-b');
     writer.prepare('INSERT INTO staff (business_id,id) VALUES (?,?)').run('shop-b', 'foreign-staff');
@@ -44,7 +45,7 @@ test('opt-in write HTTP enforces scope, current admin role, tenant and audit', a
     assert.throws(() => prepareService({ ...config, VINTAGE_ENABLE_WRITES: 'yes' }));
     writer.exec('PRAGMA user_version = 2');
     assert.throws(() => prepareService(config), /Migration required/);
-    writer.exec('PRAGMA user_version = 8');
+    writer.exec('PRAGMA user_version = 9');
     service = prepareService(config);
     service.server.listen(0, '127.0.0.1');
     await once(service.server, 'listening');
@@ -91,8 +92,14 @@ test('opt-in write HTTP enforces scope, current admin role, tenant and audit', a
     const adminShiftUrl = `${base}/v1/admin/shifts/shift-a`;
     assert.equal((await fetch(adminShiftUrl, { headers: authHeader })).status, 404);
     const adminHeaders = { authorization: `Bearer ${admin}` };
+    const copy = { sourceShiftId: 'shift-a', sourceRevision: 1, shiftId: 'copied-shift', startsAt: '2026-01-02T09:00:00.000Z', endsAt: '2026-01-02T17:00:00.000Z' };
+    assert.equal((await post('/v1/admin/shifts/copy', viewer, copy)).status, 403);
+    assert.equal((await post('/v1/admin/shifts/copy', admin, { ...copy, sourceRevision: 2 })).status, 409);
+    assert.deepEqual(await (await post('/v1/admin/shifts/copy', admin, copy)).json(), { ok: true, replayed: false });
+    assert.deepEqual(await (await post('/v1/admin/shifts/copy', admin, copy)).json(), { ok: true, replayed: true });
     assert.equal((await post('/v1/admin/locations', foreignAdmin, { locationId: 'foreign-location', label: 'Other example location' })).status, 200);
     assert.equal((await post('/v1/admin/shifts', foreignAdmin, { ...shift, shiftId: 'foreign-shift', staffId: 'foreign-staff', locationId: 'foreign-location' })).status, 200);
+    assert.equal((await post('/v1/admin/shifts/copy', foreignAdmin, { ...copy, shiftId: 'foreign-copy' })).status, 409);
     const adminParams = new URLSearchParams({ from: '2026-01-01T00:00:00.000Z', to: '2026-01-02T00:00:00.000Z', limit: '2', status: 'all' });
     const adminList = `${base}/v1/admin/shifts?${adminParams}`;
     assert.equal((await fetch(adminList, { headers: authHeader })).status, 404);
