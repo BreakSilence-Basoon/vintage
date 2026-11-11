@@ -93,6 +93,16 @@ test('opt-in write HTTP enforces scope, current admin role, tenant and audit', a
     const adminShiftUrl = `${base}/v1/admin/shifts/shift-a`;
     assert.equal((await fetch(adminShiftUrl, { headers: authHeader })).status, 404);
     const adminHeaders = { authorization: `Bearer ${admin}` };
+    assert.equal(service.db.prepare('PRAGMA busy_timeout').get().timeout, 0);
+    const lockedLocation = { locationId: 'locked-location', label: 'Example locked location' };
+    writer.exec('BEGIN IMMEDIATE');
+    try {
+      const blocked = await post('/v1/admin/locations', admin, lockedLocation);
+      assert.equal(blocked.status, 503);
+      assert.deepEqual(await blocked.json(), { error: 'unavailable' });
+      assert.equal(writer.prepare('SELECT COUNT(*) AS n FROM schedule_locations WHERE id=?').get('locked-location').n, 0);
+    } finally { writer.exec('ROLLBACK'); }
+    assert.equal((await post('/v1/admin/locations', admin, lockedLocation)).status, 200);
     const staffUrl = `${base}/v1/admin/staff?limit=1`;
     assert.equal((await fetch(staffUrl, { headers: authHeader })).status, 404);
     assert.equal((await fetch(staffUrl, { headers: { authorization: `Bearer ${readOnlyAdmin}` } })).status, 401);

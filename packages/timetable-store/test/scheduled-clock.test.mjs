@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { initializeTimetableStore } from '../src/index.mjs';
 import { migrateWithBackup } from '../src/operations.mjs';
 import { applyAuthenticatedOperation } from '../src/admin.mjs';
@@ -115,7 +116,7 @@ test('scheduled clock uses same-device confirmation, current authority and atomi
   }
 });
 
-test('concurrent confirmed clock-ins cannot create two records', async () => {
+test('concurrent confirmed clock-ins cannot create two records', async (t) => {
   const prefix = join(tmpdir(), 'vintage-clock-race-');
   const temp = mkdtempSync(prefix);
   let db;
@@ -128,24 +129,73 @@ test('concurrent confirmed clock-ins cannot create two records', async () => {
     const moduleUrl = new URL('../src/scheduled-clock.mjs', import.meta.url).href;
     const program = `import { DatabaseSync } from 'node:sqlite'; import { confirmScheduledAttendance } from ${JSON.stringify(moduleUrl)};
       let challenge = ''; for await (const chunk of process.stdin) challenge += chunk;
-      const db = new DatabaseSync(process.argv[1]); db.exec('PRAGMA busy_timeout=2000');
-      try { confirmScheduledAttendance(db, { issuer: 'https://identity.example.invalid', subject: 'example-user', issuedAt: Math.floor(Date.now()/1000) }, challenge, 'clock-in',
-        { shiftId: 'shift-a', expectedRevision: 1 }, { earlyWindowMs: 3600000, lateWindowMs: 3600000 }); process.stdout.write('ok'); }
+      const db = new DatabaseSync(process.argv[1]); if (process.argv[4] === 'wait') db.exec('PRAGMA busy_timeout=2000');
+      if (db.prepare('PRAGMA busy_timeout').get().timeout !== (process.argv[4] === 'wait' ? 2000 : 0)) throw new Error('Unexpected test connection timeout');
+      try { confirmScheduledAttendance(db, { issuer: 'https://identity.example.invalid', subject: process.argv[2], issuedAt: Math.floor(Date.now()/1000) }, challenge, 'clock-in',
+        { shiftId: process.argv[3], expectedRevision: 1 }, { earlyWindowMs: 3600000, lateWindowMs: 3600000 }); process.stdout.write('ok'); }
       catch { process.stdout.write('denied'); } finally { db.close(); }`;
-    const run = (challenge) => new Promise((done, fail) => {
-      const child = spawn(process.execPath, ['--input-type=module', '-e', program, path], { stdio: ['pipe', 'pipe', 'ignore'] });
+    const run = (challenge, subject, shift, wait) => new Promise((done, fail) => {
+      const child = spawn(process.execPath, ['--input-type=module', '-e', program, path, subject, shift, wait ? 'wait' : 'zero'], { stdio: ['pipe', 'pipe', 'ignore'] });
       let text = '';
       child.stdout.on('data', (chunk) => { text += chunk; });
       child.on('error', fail); child.stdin.end(challenge);
       child.on('close', (code) => code === 0 ? done(text) : fail(new Error('Test worker failed')));
     });
-    const outcomes = await Promise.all(challenges.map(run));
+    const outcomes = await Promise.all(challenges.map((challenge) => run(challenge, 'example-user', 'shift-a', true)));
     assert.deepEqual(outcomes.sort(), ['denied', 'ok']);
-    db = new DatabaseSync(path, { readOnly: true });
+    db = new DatabaseSync(path);
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM history').get().n, 1);
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM scheduled_attendance_events').get().n, 1);
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM kiosk_challenges WHERE used_at IS NOT NULL').get().n, 1);
+    applyAuthenticatedOperation(db, fixture.admin, 'add-shift', { shiftId: 'shift-b', staffId: 'staff-b', locationId: 'location-a',
+      startsAt: new Date(now - 60000).toISOString(), endsAt: new Date(now + 3600000).toISOString(), graceMinutes: 0 });
+    const zeroChallenges = [issueKioskChallenge(db, fixture.first, 'clock-in', 60), issueKioskChallenge(db, fixture.first, 'clock-in', 60)];
+    db.close();
+    const zeroOutcomes = await Promise.all(zeroChallenges.map((challenge) => run(challenge, 'example-other', 'shift-b', false)));
+    assert.ok(zeroOutcomes.every((value) => ['denied', 'ok'].includes(value)));
+    assert.ok(zeroOutcomes.filter((value) => value === 'ok').length <= 1);
+    t.diagnostic(`Zero-timeout concurrent successes: ${zeroOutcomes.filter((value) => value === 'ok').length} of 2`);
+    db = new DatabaseSync(path);
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM history').get().n, 1 + zeroOutcomes.filter((value) => value === 'ok').length);
+    if (!zeroOutcomes.includes('ok')) confirmScheduledAttendance(db, identity('example-other'), zeroChallenges[0], 'clock-in', { shiftId: 'shift-b', expectedRevision: 1 }, policy);
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM history').get().n, 2);
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM scheduled_attendance_events').get().n, 2);
   } finally {
+    if (db?.isOpen) db.close();
+    if (!resolve(temp).startsWith(resolve(prefix))) throw new Error('Unexpected temporary path');
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test('default zero-timeout lock failure leaves challenge and attendance unchanged for a later attempt', async () => {
+  const prefix = join(tmpdir(), 'vintage-clock-locked-');
+  const temp = mkdtempSync(prefix);
+  let db, holder, probe;
+  try {
+    const path = join(temp, 'fixture.sqlite'), now = Date.now();
+    const fixture = await setup(path, temp, new Date(now - 60000).toISOString(), new Date(now + 3600000).toISOString());
+    db = fixture.db;
+    assert.equal(db.prepare('PRAGMA busy_timeout').get().timeout, 0);
+    const challenge = issueKioskChallenge(db, fixture.first, 'clock-in', 60);
+    const digest = createHash('sha256').update(challenge).digest('hex');
+    holder = new DatabaseSync(path);
+    holder.exec('BEGIN IMMEDIATE');
+    try {
+      probe = new DatabaseSync(path);
+      assert.throws(() => probe.exec('BEGIN IMMEDIATE'), (error) => error.errcode === 5);
+      probe.close();
+      assert.throws(() => confirmScheduledAttendance(db, identity('example-user'), challenge, 'clock-in',
+        { shiftId: 'shift-a', expectedRevision: 1 }, policy), (error) => error.message === 'Scheduled attendance failed' && error.cause === undefined);
+      assert.equal(holder.prepare('SELECT used_at FROM kiosk_challenges WHERE digest=?').get(digest).used_at, null);
+      assert.equal(holder.prepare('SELECT COUNT(*) AS n FROM history').get().n, 0);
+    } finally { holder.exec('ROLLBACK'); }
+    const result = confirmScheduledAttendance(db, identity('example-user'), challenge, 'clock-in', { shiftId: 'shift-a', expectedRevision: 1 }, policy);
+    assert.ok(result.recordId);
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM history').get().n, 1);
+    assert.notEqual(db.prepare('SELECT used_at FROM kiosk_challenges WHERE digest=?').get(digest).used_at, null);
+  } finally {
+    if (probe?.isOpen) probe.close();
+    if (holder?.isOpen) holder.close();
     if (db?.isOpen) db.close();
     if (!resolve(temp).startsWith(resolve(prefix))) throw new Error('Unexpected temporary path');
     rmSync(temp, { recursive: true, force: true });
