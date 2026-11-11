@@ -53,7 +53,7 @@ export function prepareService(env, { browserAuth = null } = {}) {
     const store = createTimetableStore(db);
     const read = createHistoryHandler({ ...store, verifyAuthorization });
     const readOwn = createOwnHistoryHandler({ ...store, verifyAuthorization });
-    if (allowWrites && ![3, 4].includes(db.prepare('PRAGMA user_version').get().user_version)) throw new Error('Migration required');
+    if (allowWrites && ![3, 4, 5].includes(db.prepare('PRAGMA user_version').get().user_version)) throw new Error('Migration required');
     const write = allowWrites ? createAdminHandler({ db, verifyWriteAuthorization }) : null;
     const handle = async (request) => {
       if (browserAuth) {

@@ -41,22 +41,25 @@ export function initializeTimetableStore(db) {
 export function createTimetableStore(db) {
   db.exec('PRAGMA foreign_keys = ON');
   const version = db.prepare('PRAGMA user_version').get().user_version;
-  if (![1, 2, 3, 4].includes(version)) throw new Error('Unsupported database version');
+  if (![1, 2, 3, 4, 5].includes(version)) throw new Error('Unsupported database version');
   if (version >= 2) db.prepare('SELECT id, business_id, operation, staff_id, record_id, created_at, actor_kind FROM audit_events LIMIT 0');
   if (version >= 3) db.prepare('SELECT id, business_id, actor_staff_id, operation, staff_id, record_id, created_at FROM authenticated_audit_events LIMIT 0');
   if (version >= 4) db.prepare('SELECT id, business_id, actor_staff_id, staff_id, record_id, ends_at, created_at FROM history_close_events LIMIT 0');
+  if (version >= 5 && !db.prepare("SELECT 1 FROM sqlite_schema WHERE type = 'index' AND name = 'history_owner_started_id' AND tbl_name = 'history'").get()) throw new Error('Missing history index');
   const authorizedHistory = db.prepare(`SELECT h.business_id AS businessId, h.staff_id AS recordStaffId,
     h.id, h.starts_at AS startsAt, h.ends_at AS endsAt, m.staff_id AS actorStaffId, m.role, m.active
     FROM memberships m JOIN history h ON h.business_id = m.business_id
     WHERE m.issuer = ? AND m.subject = ? AND m.active = 1 AND h.id = ?`);
-  const ownHistory = db.prepare(`SELECT h.id, h.starts_at AS startsAt, h.ends_at AS endsAt
+  const ownHistoryQuery = (afterCursor) => db.prepare(`SELECT h.id, h.starts_at AS startsAt, h.ends_at AS endsAt
     FROM memberships m LEFT JOIN history h ON h.business_id = m.business_id AND h.staff_id = m.staff_id
-      AND (? IS NULL OR (h.starts_at, h.id) < (?, ?))
+      ${afterCursor ? 'AND (h.starts_at, h.id) < (?, ?)' : ''}
     WHERE m.issuer = ? AND m.subject = ? AND m.active = 1 AND m.role IN ('VIEWER', 'ADMIN')
     ORDER BY h.starts_at DESC, h.id DESC LIMIT ?`);
+  const firstOwnHistory = ownHistoryQuery(false);
+  const nextOwnHistory = ownHistoryQuery(true);
   return {
     async findOwnHistory(issuer, subject, cursor, limit) {
-      const rows = ownHistory.all(cursor?.startsAt ?? null, cursor?.startsAt ?? null, cursor?.id ?? null, issuer, subject, limit);
+      const rows = cursor ? nextOwnHistory.all(cursor.startsAt, cursor.id, issuer, subject, limit) : firstOwnHistory.all(issuer, subject, limit);
       return rows.length ? rows.filter((row) => row.id !== null) : null;
     },
     async findAccessAndHistory(issuer, subject, recordId) {

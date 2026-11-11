@@ -24,7 +24,7 @@ export function applyAuthenticatedOperation(db, identity, operation, input) {
   } else throw new AdminRequestError('Invalid request');
   db.exec('PRAGMA foreign_keys = ON');
   const version = db.prepare('PRAGMA user_version').get().user_version;
-  if (![3, 4].includes(version) || (operation === 'close-history' && version !== 4)) throw new Error('Migration required');
+  if (![3, 4, 5].includes(version) || (operation === 'close-history' && version < 4)) throw new Error('Migration required');
   db.exec('BEGIN IMMEDIATE');
   try {
     const actor = db.prepare("SELECT business_id, staff_id FROM memberships WHERE issuer = ? AND subject = ? AND role = 'ADMIN' AND active = 1")
