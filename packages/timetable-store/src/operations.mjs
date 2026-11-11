@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { copyTimetableDatabase } from './backup.mjs';
 import { createTimetableStore } from './index.mjs';
 import { historyOverlaps, validTimestamp } from './history-rules.mjs';
+import { restorePreparationSchema } from './restore-schema.mjs';
 
 const id = (value) => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 const subject = (value) => typeof value === 'string' && value.length > 0 && value.length <= 512 && value === value.trim();
@@ -27,7 +28,7 @@ export async function migrateWithBackup(path, backupPath) {
     db.exec('BEGIN IMMEDIATE');
     try {
       const version = db.prepare('PRAGMA user_version').get().user_version;
-      if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10].includes(version)) throw new Error('Unsupported migration');
+      if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].includes(version)) throw new Error('Unsupported migration');
       createTimetableStore(db);
       await copyTimetableDatabase(path, backupPath);
       if (version === 1) db.exec(`CREATE TABLE audit_events (
@@ -96,7 +97,7 @@ export async function migrateWithBackup(path, backupPath) {
         FOREIGN KEY (business_id, actor_staff_id) REFERENCES staff(business_id, id),
         FOREIGN KEY (business_id, staff_id) REFERENCES staff(business_id, id)
       ); PRAGMA user_version = 10;`);
-      else db.exec(`CREATE TABLE kiosk_devices (
+      else if (version === 10) db.exec(`CREATE TABLE kiosk_devices (
         business_id TEXT NOT NULL, id TEXT NOT NULL, location_id TEXT NOT NULL,
         credential_digest TEXT NOT NULL UNIQUE, active INTEGER NOT NULL CHECK (active IN (0, 1)),
         PRIMARY KEY (business_id, id), FOREIGN KEY (business_id, location_id) REFERENCES schedule_locations(business_id, id)
@@ -113,6 +114,7 @@ export async function migrateWithBackup(path, backupPath) {
         FOREIGN KEY (business_id, actor_staff_id) REFERENCES staff(business_id, id)
       ); CREATE INDEX kiosk_challenges_device_expiry ON kiosk_challenges (business_id,device_id,expires_at);
       PRAGMA user_version = 11;`);
+      else db.exec(restorePreparationSchema);
       db.exec('COMMIT');
     } catch (error) { db.exec('ROLLBACK'); throw error; }
   } finally { db.close(); }
@@ -135,7 +137,7 @@ export function applyLocalOperation(path, operation, input) {
   const db = openExisting(path);
   try {
     db.exec('PRAGMA foreign_keys = ON');
-    if (![2, 3, 4, 5, 6, 7, 8, 9, 10, 11].includes(db.prepare('PRAGMA user_version').get().user_version)) throw new Error('Migration required');
+    if (![2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].includes(db.prepare('PRAGMA user_version').get().user_version)) throw new Error('Migration required');
     db.exec('BEGIN IMMEDIATE');
     try {
       if (operation === 'add-viewer') {

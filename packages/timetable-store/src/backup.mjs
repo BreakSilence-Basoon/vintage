@@ -30,7 +30,10 @@ export async function copyTimetableDatabase(source, destination) {
     const fd = openSync(stagedFile, 'wx', 0o600);
     closeSync(fd);
     await backup(src, stagedFile);
-    dest = new DatabaseSync(stagedFile, { readOnly: true });
+    // A standalone destination cannot depend on a staging-path WAL or shared-memory file.
+    // Convert only the private copy, after SQLite's backup has finished.
+    dest = new DatabaseSync(stagedFile);
+    if (dest.prepare('PRAGMA journal_mode = DELETE').get().journal_mode.toLowerCase() !== 'delete') throw new Error('Could not finalize backup journal');
     verifyDatabase(dest);
     dest.close();
     linkSync(stagedFile, destination);
