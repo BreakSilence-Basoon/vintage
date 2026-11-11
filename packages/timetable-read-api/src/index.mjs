@@ -41,3 +41,42 @@ export function createHistoryHandler({ verifyAuthorization, findAccessAndHistory
     }
   };
 }
+
+// The store resolves the current identity and its own records in one database query.
+export function createOwnHistoryHandler({ verifyAuthorization, findOwnHistory } = {}) {
+  if (typeof verifyAuthorization !== 'function' || typeof findOwnHistory !== 'function') throw new Error('Trusted authentication and data adapters are required');
+  return async function handle(request) {
+    try {
+      const url = new URL(request.url);
+      if (request.method !== 'GET' || url.pathname !== '/v1/me/history') return reply(404, { error: 'not_found' });
+      const identity = await verifyAuthorization(request.headers.get('authorization'));
+      if (!identity || !identityPart(identity.issuer) || !identityPart(identity.subject)) return reply(401, { error: 'unauthorized' }, { 'WWW-Authenticate': 'Bearer' });
+      if ([...url.searchParams.keys()].some((key) => !['limit', 'cursor'].includes(key)) ||
+          url.searchParams.getAll('limit').length > 1 || url.searchParams.getAll('cursor').length > 1) return reply(400, { error: 'invalid_request' });
+      const limitText = url.searchParams.get('limit') ?? '50';
+      if (!/^(?:[1-9]|[1-9][0-9]|100)$/.test(limitText)) return reply(400, { error: 'invalid_request' });
+      const limit = Number(limitText);
+      let cursor = null;
+      const value = url.searchParams.get('cursor');
+      if (value !== null) {
+        if (value.length > 256 || !/^[A-Za-z0-9_-]+$/.test(value)) return reply(400, { error: 'invalid_request' });
+        let parts;
+        try {
+          const bytes = Buffer.from(value, 'base64url');
+          if (bytes.toString('base64url') !== value) throw new Error('Noncanonical cursor');
+          parts = JSON.parse(bytes.toString('utf8'));
+        } catch { return reply(400, { error: 'invalid_request' }); }
+        if (!Array.isArray(parts) || parts.length !== 2 || !timestamp(parts[0]) || !id(parts[1])) return reply(400, { error: 'invalid_request' });
+        cursor = { startsAt: parts[0], id: parts[1] };
+      }
+      const records = await findOwnHistory(identity.issuer, identity.subject, cursor, limit + 1);
+      if (records === null) return reply(404, { error: 'not_found' });
+      if (!Array.isArray(records) || records.length > limit + 1 || records.some((record) => !id(record.id) || !timestamp(record.startsAt) ||
+          (record.endsAt !== null && (!timestamp(record.endsAt) || record.endsAt < record.startsAt)))) throw new Error('Invalid stored record');
+      const page = records.slice(0, limit).map(({ id, startsAt, endsAt }) => ({ id, startsAt, endsAt }));
+      const last = page.at(-1);
+      const nextCursor = records.length > limit ? Buffer.from(JSON.stringify([last.startsAt, last.id])).toString('base64url') : null;
+      return reply(200, { records: page, nextCursor });
+    } catch { return reply(503, { error: 'unavailable' }); }
+  };
+}

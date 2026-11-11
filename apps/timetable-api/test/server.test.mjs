@@ -135,6 +135,15 @@ test('loopback HTTP verifies signed token and current stored employee access', a
       .run('https://identity.example.invalid', 'example-person', 'shop-a', 'staff-a', 'VIEWER', 1);
     writer.prepare('INSERT INTO history (business_id,id,staff_id,starts_at,ends_at) VALUES (?,?,?,?,?)')
       .run('shop-a', 'record-a', 'staff-a', '2026-01-01T09:00:00.000Z', null);
+    writer.prepare('INSERT INTO history (business_id,id,staff_id,starts_at,ends_at) VALUES (?,?,?,?,?)')
+      .run('shop-a', 'record-b', 'staff-a', '2026-01-01T09:00:00.000Z', null);
+    writer.prepare('INSERT INTO staff (business_id,id) VALUES (?,?)').run('shop-a', 'staff-other');
+    writer.prepare('INSERT INTO history (business_id,id,staff_id,starts_at,ends_at) VALUES (?,?,?,?,?)')
+      .run('shop-a', 'record-other', 'staff-other', '2026-01-02T09:00:00.000Z', null);
+    writer.prepare('INSERT INTO businesses (id) VALUES (?)').run('shop-b');
+    writer.prepare('INSERT INTO staff (business_id,id) VALUES (?,?)').run('shop-b', 'staff-a');
+    writer.prepare('INSERT INTO history (business_id,id,staff_id,starts_at,ends_at) VALUES (?,?,?,?,?)')
+      .run('shop-b', 'record-foreign', 'staff-a', '2026-01-03T09:00:00.000Z', null);
 
     const keys = await generateKeyPair('RS256', { extractable: true });
     const publicKey = { ...await exportJWK(keys.publicKey), kid: 'fixture-key', alg: 'RS256', use: 'sig' };
@@ -162,6 +171,19 @@ test('loopback HTTP verifies signed token and current stored employee access', a
     const allowed = await fetch(url, { headers });
     assert.equal(allowed.status, 200);
     assert.deepEqual(await allowed.json(), { id: 'record-a', startsAt: '2026-01-01T09:00:00.000Z', endsAt: null });
+    const listUrl = `http://127.0.0.1:${address.port}/v1/me/history`;
+    assert.equal((await fetch(listUrl)).status, 401);
+    const firstPage = await (await fetch(`${listUrl}?limit=1`, { headers })).json();
+    assert.deepEqual(firstPage.records.map((record) => record.id), ['record-b']);
+    assert.ok(firstPage.nextCursor);
+    const secondPage = await (await fetch(`${listUrl}?limit=1&cursor=${firstPage.nextCursor}`, { headers })).json();
+    assert.deepEqual(secondPage.records.map((record) => record.id), ['record-a']);
+    assert.equal(secondPage.nextCursor, null);
+    const beforeAll = Buffer.from(JSON.stringify(['2020-01-01T00:00:00.000Z', 'example'])).toString('base64url');
+    assert.deepEqual(await (await fetch(`${listUrl}?cursor=${beforeAll}`, { headers })).json(), { records: [], nextCursor: null });
+    assert.equal((await fetch(`${listUrl}?limit=101`, { headers })).status, 400);
+    assert.equal((await fetch(`${listUrl}?cursor=invalid`, { headers })).status, 400);
+    assert.equal((await fetch(`${listUrl}?limit=1&limit=2`, { headers })).status, 400);
     assert.equal((await fetch(url, { method: 'POST', headers, body: 'unexpected' })).status, 400);
     const duplicateStatus = await new Promise((resolveStatus, reject) => {
       const request = httpRequest(url, { headers: ['Authorization', `Bearer ${signed}`, 'Authorization', `Bearer ${signed}`] }, (response) => {
@@ -174,6 +196,7 @@ test('loopback HTTP verifies signed token and current stored employee access', a
     assert.equal(duplicateStatus, 400);
     writer.prepare('UPDATE memberships SET active = 0 WHERE subject = ?').run('example-person');
     assert.equal((await fetch(url, { headers })).status, 404);
+    assert.equal((await fetch(listUrl, { headers })).status, 404);
   } finally {
     if (service?.server.listening) await new Promise((resolveClose) => service.server.close(resolveClose));
     if (service?.db.isOpen) service.db.close();

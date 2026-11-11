@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { createLocalJWKSet } from 'jose';
 import { createAccessTokenVerifier } from '@vintage/access-token';
-import { createHistoryHandler } from '@vintage/timetable-read-api';
+import { createHistoryHandler, createOwnHistoryHandler } from '@vintage/timetable-read-api';
 import { createTimetableStore } from '@vintage/timetable-store';
 import { createLoopbackServer } from './server.mjs';
 import { createAdminHandler } from './admin-handler.mjs';
@@ -50,7 +50,9 @@ export function prepareService(env, { browserAuth = null } = {}) {
   if (allowWrites && !lstatSync(databaseFile).isFile()) throw new Error('Existing regular database required');
   const db = new DatabaseSync(databaseFile, { readOnly: !allowWrites });
   try {
-    const read = createHistoryHandler({ ...createTimetableStore(db), verifyAuthorization });
+    const store = createTimetableStore(db);
+    const read = createHistoryHandler({ ...store, verifyAuthorization });
+    const readOwn = createOwnHistoryHandler({ ...store, verifyAuthorization });
     if (allowWrites && ![3, 4].includes(db.prepare('PRAGMA user_version').get().user_version)) throw new Error('Migration required');
     const write = allowWrites ? createAdminHandler({ db, verifyWriteAuthorization }) : null;
     const handle = async (request) => {
@@ -61,6 +63,7 @@ export function prepareService(env, { browserAuth = null } = {}) {
         if (authorized.response) return authorized.response;
         request = authorized.request;
       }
+      if (new URL(request.url).pathname === '/v1/me/history') return readOwn(request);
       return request.method === 'POST' && write ? write(request) : read(request);
     };
     return { server: createLoopbackServer(handle, { allowWrites, browserLogin: !!browserAuth }), db, port };
