@@ -48,7 +48,7 @@ export function prepareService(env) {
   const db = new DatabaseSync(databaseFile, { readOnly: !allowWrites });
   try {
     const read = createHistoryHandler({ ...createTimetableStore(db), verifyAuthorization });
-    if (allowWrites && db.prepare('PRAGMA user_version').get().user_version !== 3) throw new Error('Migration required');
+    if (allowWrites && ![3, 4].includes(db.prepare('PRAGMA user_version').get().user_version)) throw new Error('Migration required');
     const write = allowWrites ? createAdminHandler({ db, verifyWriteAuthorization }) : null;
     const handle = (request) => request.method === 'POST' && write ? write(request) : read(request);
     return { server: createLoopbackServer(handle, { allowWrites }), db, port };

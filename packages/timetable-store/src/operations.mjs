@@ -3,14 +3,10 @@ import { isAbsolute } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { copyTimetableDatabase } from './backup.mjs';
 import { createTimetableStore } from './index.mjs';
+import { historyOverlaps, validTimestamp } from './history-rules.mjs';
 
 const id = (value) => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 const subject = (value) => typeof value === 'string' && value.length > 0 && value.length <= 512 && value === value.trim();
-const timestamp = (value) => {
-  if (typeof value !== 'string') return false;
-  const date = new Date(value);
-  return Number.isFinite(date.valueOf()) && date.toISOString() === value;
-};
 function trustedIssuer(value) {
   try {
     const url = new URL(value);
@@ -31,7 +27,7 @@ export async function migrateWithBackup(path, backupPath) {
     db.exec('BEGIN IMMEDIATE');
     try {
       const version = db.prepare('PRAGMA user_version').get().user_version;
-      if (![1, 2].includes(version)) throw new Error('Unsupported migration');
+      if (![1, 2, 3].includes(version)) throw new Error('Unsupported migration');
       createTimetableStore(db);
       await copyTimetableDatabase(path, backupPath);
       if (version === 1) db.exec(`CREATE TABLE audit_events (
@@ -42,7 +38,7 @@ export async function migrateWithBackup(path, backupPath) {
         FOREIGN KEY (business_id, staff_id) REFERENCES staff(business_id, id),
         FOREIGN KEY (business_id, record_id) REFERENCES history(business_id, id)
       ); PRAGMA user_version = 2;`);
-      else db.exec(`CREATE TABLE authenticated_audit_events (
+      else if (version === 2) db.exec(`CREATE TABLE authenticated_audit_events (
         id INTEGER PRIMARY KEY, business_id TEXT NOT NULL, actor_staff_id TEXT NOT NULL,
         operation TEXT NOT NULL CHECK (operation IN ('add-viewer', 'add-history', 'deactivate-viewer')),
         staff_id TEXT NOT NULL, record_id TEXT, created_at TEXT NOT NULL,
@@ -50,6 +46,14 @@ export async function migrateWithBackup(path, backupPath) {
         FOREIGN KEY (business_id, staff_id) REFERENCES staff(business_id, id),
         FOREIGN KEY (business_id, record_id) REFERENCES history(business_id, id)
       ); PRAGMA user_version = 3;`);
+      else db.exec(`CREATE TABLE history_close_events (
+        id INTEGER PRIMARY KEY, business_id TEXT NOT NULL, actor_staff_id TEXT NOT NULL,
+        staff_id TEXT NOT NULL, record_id TEXT NOT NULL, ends_at TEXT NOT NULL, created_at TEXT NOT NULL,
+        UNIQUE (business_id, record_id),
+        FOREIGN KEY (business_id, actor_staff_id) REFERENCES staff(business_id, id),
+        FOREIGN KEY (business_id, staff_id) REFERENCES staff(business_id, id),
+        FOREIGN KEY (business_id, record_id) REFERENCES history(business_id, id)
+      ); PRAGMA user_version = 4;`);
       db.exec('COMMIT');
     } catch (error) { db.exec('ROLLBACK'); throw error; }
   } finally { db.close(); }
@@ -62,9 +66,9 @@ export function applyLocalOperation(path, operation, input) {
         !trustedIssuer(input.issuer) || !subject(input.subject)) throw new Error('Invalid input');
   } else if (operation === 'add-history') {
     if (Object.keys(input).some((key) => !['businessId', 'staffId', 'recordId', 'startsAt', 'endsAt'].includes(key)) ||
-        !id(input.recordId) || !timestamp(input.startsAt) ||
-        (input.endsAt !== null && !timestamp(input.endsAt)) ||
-        (input.endsAt !== null && input.endsAt < input.startsAt)) throw new Error('Invalid input');
+        !id(input.recordId) || !validTimestamp(input.startsAt) ||
+        (input.endsAt !== null && !validTimestamp(input.endsAt)) ||
+        (input.endsAt !== null && input.endsAt <= input.startsAt)) throw new Error('Invalid input');
   } else if (operation === 'deactivate-viewer') {
     if (Object.keys(input).some((key) => !['businessId', 'staffId'].includes(key))) throw new Error('Invalid input');
   } else throw new Error('Invalid operation');
@@ -72,7 +76,7 @@ export function applyLocalOperation(path, operation, input) {
   const db = openExisting(path);
   try {
     db.exec('PRAGMA foreign_keys = ON');
-    if (![2, 3].includes(db.prepare('PRAGMA user_version').get().user_version)) throw new Error('Migration required');
+    if (![2, 3, 4].includes(db.prepare('PRAGMA user_version').get().user_version)) throw new Error('Migration required');
     db.exec('BEGIN IMMEDIATE');
     try {
       if (operation === 'add-viewer') {
@@ -80,6 +84,7 @@ export function applyLocalOperation(path, operation, input) {
         db.prepare('INSERT INTO memberships (issuer,subject,business_id,staff_id,role,active) VALUES (?,?,?,?,?,?)')
           .run(input.issuer, input.subject, input.businessId, input.staffId, 'VIEWER', 1);
       } else if (operation === 'add-history') {
+        if (historyOverlaps(db, input.businessId, input.staffId, input.startsAt, input.endsAt)) throw new Error('Record conflicts');
         db.prepare('INSERT INTO history (business_id,id,staff_id,starts_at,ends_at) VALUES (?,?,?,?,?)')
           .run(input.businessId, input.recordId, input.staffId, input.startsAt, input.endsAt);
       } else {

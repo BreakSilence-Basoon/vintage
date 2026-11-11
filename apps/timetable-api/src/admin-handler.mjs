@@ -1,8 +1,9 @@
-import { AdminAccessError, AdminRequestError, applyAuthenticatedOperation } from '@vintage/timetable-store/admin';
+import { AdminAccessError, AdminConflictError, AdminRequestError, applyAuthenticatedOperation } from '@vintage/timetable-store/admin';
 
 const routes = new Map([
   ['/v1/admin/viewers', 'add-viewer'],
   ['/v1/admin/history', 'add-history'],
+  ['/v1/admin/history/close', 'close-history'],
   ['/v1/admin/viewers/deactivate', 'deactivate-viewer'],
 ]);
 const reply = (status, body, extra = {}) => Response.json(body, { status, headers: { 'Cache-Control': 'no-store', ...extra } });
@@ -21,11 +22,12 @@ export function createAdminHandler({ db, verifyWriteAuthorization } = {}) {
     let input;
     try { input = await request.json(); } catch { return reply(400, { error: 'invalid_request' }); }
     try {
-      applyAuthenticatedOperation(db, identity, operation, input);
-      return reply(200, { ok: true });
+      const result = applyAuthenticatedOperation(db, identity, operation, input);
+      return reply(200, { ok: true, replayed: result.replayed });
     } catch (error) {
       if (error instanceof AdminRequestError) return reply(400, { error: 'invalid_request' });
       if (error instanceof AdminAccessError) return reply(403, { error: 'forbidden' });
+      if (error instanceof AdminConflictError) return reply(409, { error: 'conflict' });
       return reply(503, { error: 'unavailable' });
     }
   };
