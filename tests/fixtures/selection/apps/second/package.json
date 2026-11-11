@@ -1,0 +1,1 @@
+{"name":"@vintage-fixture/second","private":true,"version":"1.0.0","scripts":{"probe":"node -e \"console.log('fixture:second')\""},"dependencies":{"@vintage-fixture/shared":"workspace:*"}}

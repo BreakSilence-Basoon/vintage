@@ -1,0 +1,7 @@
+{
+  "name": "vintage-workspace",
+  "private": true,
+  "packageManager": "pnpm@10.11.0",
+  "engines": { "node": ">=24 <25" },
+  "scripts": { "test": "node --test tests/workspace-selection.test.mjs" }
+}
