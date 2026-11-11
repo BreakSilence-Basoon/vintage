@@ -53,6 +53,7 @@ test('fake OIDC login reaches HTTP authorization, honors current membership and 
     await migrateWithBackup(database, join(temp, 'backup-v7.sqlite'));
     await migrateWithBackup(database, join(temp, 'backup-v8.sqlite'));
     await migrateWithBackup(database, join(temp, 'backup-v9.sqlite'));
+    await migrateWithBackup(database, join(temp, 'backup-v10.sqlite'));
     writer = new DatabaseSync(database);
     const keys = await generateKeyPair('RS256', { extractable: true });
     const publicKey = { ...await exportJWK(keys.publicKey), kid: 'fixture-key', alg: 'RS256', use: 'sig' };
