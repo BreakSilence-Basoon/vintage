@@ -40,7 +40,18 @@ test('version 5 migration backs up before adding the owner and time index', asyn
     db.close();
     await migrateWithBackup(path, join(temp, 'backup-v5.sqlite'));
     await migrateWithBackup(path, join(temp, 'backup-v6.sqlite'));
-    await assert.rejects(migrateWithBackup(path, join(temp, 'backup-v7.sqlite')));
+    await migrateWithBackup(path, join(temp, 'backup-v7.sqlite'));
+    db = new DatabaseSync(path, { readOnly: true });
+    assert.equal(db.prepare('PRAGMA user_version').get().user_version, 8);
+    assert.equal(db.prepare("SELECT tbl_name FROM sqlite_schema WHERE type = 'index' AND name = 'scheduled_shifts_business_time'").get().tbl_name, 'scheduled_shifts');
+    const schedulePlan = db.prepare(`EXPLAIN QUERY PLAN SELECT s.id, s.starts_at FROM memberships m
+      LEFT JOIN scheduled_shifts s ON s.business_id = m.business_id AND s.starts_at < ? AND s.ends_at > ?
+      WHERE m.issuer = ? AND m.subject = ? AND m.role = 'ADMIN' AND m.active = 1
+      ORDER BY s.starts_at DESC, s.id DESC LIMIT ?`)
+      .all('2026-02-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', 'https://identity.example.invalid', 'example-user', 10);
+    assert.ok(schedulePlan.some((row) => row.detail.includes('scheduled_shifts_business_time')));
+    db.close();
+    await assert.rejects(migrateWithBackup(path, join(temp, 'backup-v8.sqlite')));
   } finally {
     if (snapshot?.isOpen) snapshot.close();
     if (db?.isOpen) db.close();

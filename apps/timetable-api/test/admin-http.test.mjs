@@ -24,11 +24,15 @@ test('opt-in write HTTP enforces scope, current admin role, tenant and audit', a
     await migrateWithBackup(database, join(temp, 'v4-backup.sqlite'));
     await migrateWithBackup(database, join(temp, 'v5-backup.sqlite'));
     await migrateWithBackup(database, join(temp, 'v6-backup.sqlite'));
+    await migrateWithBackup(database, join(temp, 'v7-backup.sqlite'));
     writer = new DatabaseSync(database);
     writer.prepare('INSERT INTO businesses (id) VALUES (?)').run('shop-b');
     writer.prepare('INSERT INTO staff (business_id,id) VALUES (?,?)').run('shop-b', 'foreign-staff');
+    writer.prepare('INSERT INTO staff (business_id,id) VALUES (?,?)').run('shop-b', 'foreign-admin');
     writer.prepare('INSERT INTO memberships (issuer,subject,business_id,staff_id,role,active) VALUES (?,?,?,?,?,1)')
       .run(issuer, 'example-foreign', 'shop-b', 'foreign-staff', 'VIEWER');
+    writer.prepare('INSERT INTO memberships (issuer,subject,business_id,staff_id,role,active) VALUES (?,?,?,?,?,1)')
+      .run(issuer, 'example-foreign-admin', 'shop-b', 'foreign-admin', 'ADMIN');
     const keys = await generateKeyPair('RS256', { extractable: true });
     const publicKey = { ...await exportJWK(keys.publicKey), kid: 'fixture-key', alg: 'RS256', use: 'sig' };
     const keyFile = join(temp, 'fixture-public-keys.json');
@@ -40,7 +44,7 @@ test('opt-in write HTTP enforces scope, current admin role, tenant and audit', a
     assert.throws(() => prepareService({ ...config, VINTAGE_ENABLE_WRITES: 'yes' }));
     writer.exec('PRAGMA user_version = 2');
     assert.throws(() => prepareService(config), /Migration required/);
-    writer.exec('PRAGMA user_version = 7');
+    writer.exec('PRAGMA user_version = 8');
     service = prepareService(config);
     service.server.listen(0, '127.0.0.1');
     await once(service.server, 'listening');
@@ -52,6 +56,7 @@ test('opt-in write HTTP enforces scope, current admin role, tenant and audit', a
     const readOnlyAdmin = await signed('example-admin', 'timetable:access');
     const viewer = await signed('example-viewer', 'timetable:access timetable:write');
     const foreignViewer = await signed('example-foreign', 'timetable:access');
+    const foreignAdmin = await signed('example-foreign-admin', 'timetable:access timetable:write');
     const post = (path, bearer, body, extra = {}) => fetch(base + path, { method: 'POST',
       headers: { authorization: `Bearer ${bearer}`, 'content-type': 'application/json; charset=utf-8', ...extra }, body: JSON.stringify(body) });
     assert.equal((await post('/v1/admin/viewers', readOnlyAdmin, { staffId: 'staff-a', subject: 'example-viewer' })).status, 401);
@@ -86,6 +91,21 @@ test('opt-in write HTTP enforces scope, current admin role, tenant and audit', a
     const adminShiftUrl = `${base}/v1/admin/shifts/shift-a`;
     assert.equal((await fetch(adminShiftUrl, { headers: authHeader })).status, 404);
     const adminHeaders = { authorization: `Bearer ${admin}` };
+    assert.equal((await post('/v1/admin/locations', foreignAdmin, { locationId: 'foreign-location', label: 'Other example location' })).status, 200);
+    assert.equal((await post('/v1/admin/shifts', foreignAdmin, { ...shift, shiftId: 'foreign-shift', staffId: 'foreign-staff', locationId: 'foreign-location' })).status, 200);
+    const adminParams = new URLSearchParams({ from: '2026-01-01T00:00:00.000Z', to: '2026-01-02T00:00:00.000Z', limit: '2', status: 'all' });
+    const adminList = `${base}/v1/admin/shifts?${adminParams}`;
+    assert.equal((await fetch(adminList, { headers: authHeader })).status, 404);
+    assert.equal((await fetch(adminList, { headers: { authorization: `Bearer ${readOnlyAdmin}` } })).status, 401);
+    const adminPage = await (await fetch(adminList, { headers: adminHeaders })).json();
+    assert.deepEqual(adminPage.shifts.map((item) => item.id), ['shift-b', 'shift-a']);
+    assert.ok(adminPage.shifts.every((item) => item.staffId === 'staff-a'));
+    adminParams.set('cursor', adminPage.nextCursor);
+    const adminNext = await (await fetch(`${base}/v1/admin/shifts?${adminParams}`, { headers: adminHeaders })).json();
+    assert.deepEqual(adminNext.shifts.map((item) => item.id), ['shift-before']);
+    assert.equal(adminNext.nextCursor, null);
+    assert.deepEqual((await (await fetch(adminList, { headers: { authorization: `Bearer ${foreignAdmin}` } })).json()).shifts.map((item) => item.id), ['foreign-shift']);
+    assert.equal((await fetch(`${adminList}&status=all`, { headers: adminHeaders })).status, 400);
     assert.equal((await (await fetch(adminShiftUrl, { headers: adminHeaders })).json()).revision, 1);
     const correction = { ...shift, endsAt: '2026-01-01T16:30:00.000Z', expectedRevision: 1, reason: 'Example correction' };
     assert.equal((await post('/v1/admin/shifts/update', viewer, correction)).status, 403);
@@ -97,6 +117,8 @@ test('opt-in write HTTP enforces scope, current admin role, tenant and audit', a
     const canceled = await (await fetch(adminShiftUrl, { headers: adminHeaders })).json();
     assert.equal(canceled.active, false);
     assert.equal(canceled.revision, 3);
+    const canceledParams = new URLSearchParams({ from: '2026-01-01T00:00:00.000Z', to: '2026-01-02T00:00:00.000Z', status: 'canceled' });
+    assert.deepEqual((await (await fetch(`${base}/v1/admin/shifts?${canceledParams}`, { headers: adminHeaders })).json()).shifts.map((item) => item.id), ['shift-a']);
     assert.equal((await post('/v1/admin/shifts/restore', admin, { shiftId: 'shift-a', expectedRevision: 3, reason: 'Example restore' })).status, 200);
     assert.deepEqual((await (await fetch(`${base}/v1/me/shifts?${canceledWindow}`, { headers: authHeader })).json()).shifts.map((item) => item.id), ['shift-a']);
     assert.equal(created.headers.get('cache-control'), 'no-store');
@@ -135,6 +157,7 @@ test('opt-in write HTTP enforces scope, current admin role, tenant and audit', a
     assert.equal(writer.prepare('SELECT COUNT(*) AS count FROM authenticated_audit_events WHERE actor_staff_id = ?').get('admin-a').count, 3);
     assert.equal(writer.prepare('SELECT COUNT(*) AS count FROM history_close_events WHERE actor_staff_id = ?').get('admin-a').count, 1);
     writer.prepare('UPDATE memberships SET role = ? WHERE subject = ?').run('VIEWER', 'example-admin');
+    assert.equal((await fetch(adminList, { headers: adminHeaders })).status, 404);
     assert.equal((await post('/v1/admin/viewers', admin, { staffId: 'staff-b', subject: 'example-other' })).status, 403);
     assert.equal((await post('/v1/admin/history', admin, record)).status, 403);
     assert.equal(writer.prepare('SELECT COUNT(*) AS count FROM authenticated_audit_events').get().count, 3);

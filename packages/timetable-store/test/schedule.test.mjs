@@ -171,3 +171,31 @@ test('schedule revision migration failure keeps version 6 and its verified backu
     rmSync(temp, { recursive: true, force: true });
   }
 });
+
+test('schedule list index failure leaves version 7 and its backup intact', async () => {
+  const prefix = join(tmpdir(), 'vintage-schedule-list-failure-');
+  const temp = mkdtempSync(prefix);
+  let db, backup;
+  try {
+    const path = join(temp, 'fixture.sqlite');
+    db = new DatabaseSync(path);
+    initializeTimetableStore(db);
+    db.close();
+    for (const version of [1, 2, 3, 4, 5, 6]) await migrateWithBackup(path, join(temp, `backup-v${version}.sqlite`));
+    db = new DatabaseSync(path);
+    db.exec('CREATE INDEX scheduled_shifts_business_time ON staff (id)');
+    db.close();
+    const backupPath = join(temp, 'backup-v7.sqlite');
+    await assert.rejects(migrateWithBackup(path, backupPath));
+    db = new DatabaseSync(path, { readOnly: true });
+    backup = new DatabaseSync(backupPath, { readOnly: true });
+    assert.equal(db.prepare('PRAGMA user_version').get().user_version, 7);
+    assert.equal(backup.prepare('PRAGMA user_version').get().user_version, 7);
+    assert.equal(db.prepare("SELECT tbl_name FROM sqlite_schema WHERE name = 'scheduled_shifts_business_time'").get().tbl_name, 'staff');
+  } finally {
+    if (backup?.isOpen) backup.close();
+    if (db?.isOpen) db.close();
+    if (!resolve(temp).startsWith(resolve(prefix))) throw new Error('Unexpected temporary path');
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
