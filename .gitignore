@@ -4,6 +4,7 @@ node_modules/
 .next/
 coverage/
 .data/
+.vintage-copy-*/
 *.sqlite*
 *.db
 *.db-*

@@ -40,7 +40,9 @@ export function initializeTimetableStore(db) {
 
 export function createTimetableStore(db) {
   db.exec('PRAGMA foreign_keys = ON');
-  if (db.prepare('PRAGMA user_version').get().user_version !== 1) throw new Error('Unsupported database version');
+  const version = db.prepare('PRAGMA user_version').get().user_version;
+  if (![1, 2].includes(version)) throw new Error('Unsupported database version');
+  if (version === 2) db.prepare('SELECT id, business_id, operation, staff_id, record_id, created_at, actor_kind FROM audit_events LIMIT 0');
   const authorizedHistory = db.prepare(`SELECT h.business_id AS businessId, h.staff_id AS recordStaffId,
     h.id, h.starts_at AS startsAt, h.ends_at AS endsAt, m.staff_id AS actorStaffId, m.role, m.active
     FROM memberships m JOIN history h ON h.business_id = m.business_id
