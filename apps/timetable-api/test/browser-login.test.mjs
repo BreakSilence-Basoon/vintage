@@ -47,6 +47,7 @@ test('fake OIDC login reaches HTTP authorization, honors current membership and 
     await migrateWithBackup(database, join(temp, 'backup-v1.sqlite'));
     await migrateWithBackup(database, join(temp, 'backup-v2.sqlite'));
     await migrateWithBackup(database, join(temp, 'backup-v3.sqlite'));
+    await migrateWithBackup(database, join(temp, 'backup-v4.sqlite'));
     writer = new DatabaseSync(database);
     const keys = await generateKeyPair('RS256', { extractable: true });
     const publicKey = { ...await exportJWK(keys.publicKey), kid: 'fixture-key', alg: 'RS256', use: 'sig' };
@@ -122,6 +123,10 @@ test('fake OIDC login reaches HTTP authorization, honors current membership and 
     assert.equal((await adminPost(writeSession, publicOrigin)).status, 403);
     writer.prepare('UPDATE memberships SET role = ? WHERE subject = ?').run('ADMIN', 'example-user');
     assert.equal((await adminPost(writeSession, publicOrigin)).status, 200);
+    const close = await fetch(`${base}/v1/admin/history/close`, { method: 'POST',
+      headers: { cookie: writeSession, origin: publicOrigin, 'content-type': 'application/json' },
+      body: JSON.stringify({ recordId: 'record-a', endsAt: '2026-01-01T10:00:00.000Z' }) });
+    assert.equal(close.status, 200);
     writer.prepare('UPDATE memberships SET role = ? WHERE subject = ?').run('VIEWER', 'example-user');
     assert.equal((await adminPost(writeSession, publicOrigin)).status, 403);
     const writeHeaders = { cookie: writeSession };
