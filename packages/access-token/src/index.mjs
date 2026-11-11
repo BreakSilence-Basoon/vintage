@@ -1,6 +1,7 @@
 import { jwtVerify } from 'jose';
 
 const nonempty = (value) => typeof value === 'string' && value.length > 0 && value.trim() === value;
+const scopeToken = (value) => typeof value === 'string' && /^[\x21\x23-\x5B\x5D-\x7E]+$/.test(value);
 
 // keyResolver must come from the configured trusted issuer, never from a token.
 export function createAccessTokenVerifier({ issuer, audience, clientIds, requiredScopes, keyResolver } = {}) {
@@ -10,8 +11,7 @@ export function createAccessTokenVerifier({ issuer, audience, clientIds, require
     throw new Error('Issuer must be a clean HTTPS URL');
   }
   if (!nonempty(audience) || !Array.isArray(clientIds) || !clientIds.length || !clientIds.every(nonempty) ||
-      !Array.isArray(requiredScopes) || !requiredScopes.length || !requiredScopes.every(nonempty) ||
-      requiredScopes.some((scope) => /\s/.test(scope)) || typeof keyResolver !== 'function') {
+      !Array.isArray(requiredScopes) || !requiredScopes.length || !requiredScopes.every(scopeToken) || typeof keyResolver !== 'function') {
     throw new Error('Invalid access token verifier configuration');
   }
   const clients = new Set(clientIds);
@@ -32,7 +32,8 @@ export function createAccessTokenVerifier({ issuer, audience, clientIds, require
           typeof payload.scope !== 'string') return null;
       const granted = new Set(payload.scope.split(' ').filter(Boolean));
       if (!scopes.every((scope) => granted.has(scope))) return null;
-      return { issuer, subject: payload.sub, clientId: payload.client_id };
+      return { issuer, subject: payload.sub, clientId: payload.client_id,
+        expiresAt: Math.min(payload.exp, payload.iat + 900) * 1000 };
     } catch {
       return null;
     }

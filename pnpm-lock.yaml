@@ -29,6 +29,19 @@ importers:
         specifier: 6.2.17
         version: 6.2.17
 
+  packages/oidc-login:
+    dependencies:
+      openid-client:
+        specifier: 6.8.9
+        version: 6.8.9
+    devDependencies:
+      '@vintage/access-token':
+        specifier: workspace:*
+        version: link:../access-token
+      jose:
+        specifier: 6.2.17
+        version: 6.2.17
+
   packages/timetable-policy: {}
 
   packages/timetable-read-api:
@@ -61,6 +74,19 @@ packages:
   jose@6.2.17:
     resolution: {integrity: sha512-wOuK9V1yujQFH5S0ZWmLcDZN7+IKh9bUCC2ZPCf2HDlol3WWHy+PPyNjEI75FXRLMp3vDKQcupP59xhVU95hcg==}
 
+  oauth4webapi@3.8.8:
+    resolution: {integrity: sha512-8N28E+a/oxfXWBgOMt+ZP/JUf/XR+IFbvkAEPP3gznXOMv9BpAAwiIj0TFNz3tGTPc0ZQ8zmWBNgN1nAys0gng==}
+
+  openid-client@6.8.9:
+    resolution: {integrity: sha512-6mXMRNJxDOf6BflEWLXul1UwzLFz++9Ofz1PYwPwwsJsyXBsbfkO+Jo255SW1qnFNLYz4EJWHz42X4OJJrya/g==}
+
 snapshots:
 
   jose@6.2.17: {}
+
+  oauth4webapi@3.8.8: {}
+
+  openid-client@6.8.9:
+    dependencies:
+      jose: 6.2.17
+      oauth4webapi: 3.8.8
