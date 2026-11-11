@@ -8,4 +8,59 @@ importers:
 
   .: {}
 
+  apps/timetable-api:
+    dependencies:
+      '@vintage/access-token':
+        specifier: workspace:*
+        version: link:../../packages/access-token
+      '@vintage/timetable-read-api':
+        specifier: workspace:*
+        version: link:../../packages/timetable-read-api
+      '@vintage/timetable-store':
+        specifier: workspace:*
+        version: link:../../packages/timetable-store
+      jose:
+        specifier: 6.2.17
+        version: 6.2.17
+
+  packages/access-token:
+    dependencies:
+      jose:
+        specifier: 6.2.17
+        version: 6.2.17
+
   packages/timetable-policy: {}
+
+  packages/timetable-read-api:
+    dependencies:
+      '@vintage/timetable-policy':
+        specifier: workspace:*
+        version: link:../timetable-policy
+    devDependencies:
+      '@vintage/access-token':
+        specifier: workspace:*
+        version: link:../access-token
+      jose:
+        specifier: 6.2.17
+        version: 6.2.17
+
+  packages/timetable-store:
+    devDependencies:
+      '@vintage/access-token':
+        specifier: workspace:*
+        version: link:../access-token
+      '@vintage/timetable-read-api':
+        specifier: workspace:*
+        version: link:../timetable-read-api
+      jose:
+        specifier: 6.2.17
+        version: 6.2.17
+
+packages:
+
+  jose@6.2.17:
+    resolution: {integrity: sha512-wOuK9V1yujQFH5S0ZWmLcDZN7+IKh9bUCC2ZPCf2HDlol3WWHy+PPyNjEI75FXRLMp3vDKQcupP59xhVU95hcg==}
+
+snapshots:
+
+  jose@6.2.17: {}

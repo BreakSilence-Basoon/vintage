@@ -1,0 +1,10 @@
+{
+  "name": "@vintage/timetable-read-api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.mjs",
+  "scripts": { "test": "node --test test/*.test.mjs" },
+  "dependencies": { "@vintage/timetable-policy": "workspace:*" },
+  "devDependencies": { "@vintage/access-token": "workspace:*", "jose": "6.2.17" }
+}
