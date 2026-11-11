@@ -46,12 +46,13 @@ export function applyAuthenticatedOperation(db, identity, operation, input) {
   } else throw new AdminRequestError('Invalid request');
   db.exec('PRAGMA foreign_keys = ON');
   const version = db.prepare('PRAGMA user_version').get().user_version;
-  if (![3, 4, 5, 6, 7, 8, 9, 10, 11, 12].includes(version) || (operation === 'close-history' && version < 4) ||
+  if (![3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13].includes(version) || (operation === 'close-history' && version < 4) ||
       (['add-location', 'add-shift'].includes(operation) && version < 6) ||
       (['update-shift', 'cancel-shift', 'restore-shift'].includes(operation) && version < 7) ||
       (operation === 'copy-shift' && version < 9) || (operation === 'reactivate-viewer' && version < 10)) throw new Error('Migration required');
   db.exec('BEGIN IMMEDIATE');
   try {
+    if (version >= 13 && db.prepare('SELECT status FROM recovery_guard WHERE id = 1').get()?.status === 'pending') throw new Error('Recovery authority review required');
     const actor = db.prepare(`SELECT business_id, staff_id FROM memberships WHERE issuer = ? AND subject = ? AND role = 'ADMIN' AND active = 1 ${version >= 10 ? 'AND token_valid_after <= ?' : ''}`)
       .get(identity.issuer, identity.subject, ...(version >= 10 ? [Number.isSafeInteger(identity.issuedAt) && identity.issuedAt >= 0 ? identity.issuedAt : -1] : []));
     if (!actor || !id(actor.business_id) || !id(actor.staff_id)) throw new AdminAccessError('Not authorized');
