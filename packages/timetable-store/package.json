@@ -1,0 +1,13 @@
+{
+  "name": "@vintage/timetable-store",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.mjs",
+  "scripts": { "test": "node --test test/*.test.mjs" },
+  "devDependencies": {
+    "@vintage/access-token": "workspace:*",
+    "@vintage/timetable-read-api": "workspace:*",
+    "jose": "6.2.17"
+  }
+}

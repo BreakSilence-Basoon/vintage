@@ -1,6 +1,12 @@
 node_modules/
 .env
 .env.*
-!.env.example
 .next/
 coverage/
+.data/
+*.sqlite*
+*.db
+*.db-*
+*.pem
+*.key
+*.p12
