@@ -41,7 +41,7 @@ export function initializeTimetableStore(db) {
 export function createTimetableStore(db) {
   db.exec('PRAGMA foreign_keys = ON');
   const version = db.prepare('PRAGMA user_version').get().user_version;
-  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10].includes(version)) throw new Error('Unsupported database version');
+  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].includes(version)) throw new Error('Unsupported database version');
   if (version >= 2) db.prepare('SELECT id, business_id, operation, staff_id, record_id, created_at, actor_kind FROM audit_events LIMIT 0');
   if (version >= 3) db.prepare('SELECT id, business_id, actor_staff_id, operation, staff_id, record_id, created_at FROM authenticated_audit_events LIMIT 0');
   if (version >= 4) db.prepare('SELECT id, business_id, actor_staff_id, staff_id, record_id, ends_at, created_at FROM history_close_events LIMIT 0');
@@ -61,6 +61,12 @@ export function createTimetableStore(db) {
   if (version >= 10) {
     db.prepare('SELECT token_valid_after FROM memberships LIMIT 0');
     db.prepare('SELECT business_id, actor_staff_id, staff_id, reason, created_at FROM membership_reactivation_events LIMIT 0');
+  }
+  if (version >= 11) {
+    db.prepare('SELECT business_id,id,location_id,credential_digest,active FROM kiosk_devices LIMIT 0');
+    db.prepare('SELECT business_id,actor_staff_id,device_id,operation,created_at FROM kiosk_device_events LIMIT 0');
+    db.prepare('SELECT digest,business_id,device_id,purpose,expires_at,used_at,actor_staff_id FROM kiosk_challenges LIMIT 0');
+    if (!db.prepare("SELECT 1 FROM sqlite_schema WHERE type = 'index' AND name = 'kiosk_challenges_device_expiry' AND tbl_name = 'kiosk_challenges'").get()) throw new Error('Missing challenge index');
   }
   const epochFilter = version >= 10 ? 'AND m.token_valid_after <= ?' : '';
   const tokenArgs = (issuedAt) => version >= 10 ? [Number.isSafeInteger(issuedAt) && issuedAt >= 0 ? issuedAt : -1] : [];
