@@ -41,7 +41,7 @@ export function initializeTimetableStore(db) {
 export function createTimetableStore(db) {
   db.exec('PRAGMA foreign_keys = ON');
   const version = db.prepare('PRAGMA user_version').get().user_version;
-  if (![1, 2, 3, 4, 5, 6, 7, 8, 9].includes(version)) throw new Error('Unsupported database version');
+  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10].includes(version)) throw new Error('Unsupported database version');
   if (version >= 2) db.prepare('SELECT id, business_id, operation, staff_id, record_id, created_at, actor_kind FROM audit_events LIMIT 0');
   if (version >= 3) db.prepare('SELECT id, business_id, actor_staff_id, operation, staff_id, record_id, created_at FROM authenticated_audit_events LIMIT 0');
   if (version >= 4) db.prepare('SELECT id, business_id, actor_staff_id, staff_id, record_id, ends_at, created_at FROM history_close_events LIMIT 0');
@@ -58,14 +58,20 @@ export function createTimetableStore(db) {
   }
   if (version >= 8 && !db.prepare("SELECT 1 FROM sqlite_schema WHERE type = 'index' AND name = 'scheduled_shifts_business_time' AND tbl_name = 'scheduled_shifts'").get()) throw new Error('Missing schedule index');
   if (version >= 9) db.prepare('SELECT business_id, actor_staff_id, source_shift_id, source_revision, target_shift_id, target_starts_at, target_ends_at, source_snapshot, created_at FROM schedule_copy_events LIMIT 0');
+  if (version >= 10) {
+    db.prepare('SELECT token_valid_after FROM memberships LIMIT 0');
+    db.prepare('SELECT business_id, actor_staff_id, staff_id, reason, created_at FROM membership_reactivation_events LIMIT 0');
+  }
+  const epochFilter = version >= 10 ? 'AND m.token_valid_after <= ?' : '';
+  const tokenArgs = (issuedAt) => version >= 10 ? [Number.isSafeInteger(issuedAt) && issuedAt >= 0 ? issuedAt : -1] : [];
   const authorizedHistory = db.prepare(`SELECT h.business_id AS businessId, h.staff_id AS recordStaffId,
     h.id, h.starts_at AS startsAt, h.ends_at AS endsAt, m.staff_id AS actorStaffId, m.role, m.active
     FROM memberships m JOIN history h ON h.business_id = m.business_id
-    WHERE m.issuer = ? AND m.subject = ? AND m.active = 1 AND h.id = ?`);
+    WHERE m.issuer = ? AND m.subject = ? AND m.active = 1 AND h.id = ? ${epochFilter}`);
   const ownHistoryQuery = (afterCursor) => db.prepare(`SELECT h.id, h.starts_at AS startsAt, h.ends_at AS endsAt
     FROM memberships m LEFT JOIN history h ON h.business_id = m.business_id AND h.staff_id = m.staff_id
       ${afterCursor ? 'AND (h.starts_at, h.id) < (?, ?)' : ''}
-    WHERE m.issuer = ? AND m.subject = ? AND m.active = 1 AND m.role IN ('VIEWER', 'ADMIN')
+    WHERE m.issuer = ? AND m.subject = ? AND m.active = 1 AND m.role IN ('VIEWER', 'ADMIN') ${epochFilter}
     ORDER BY h.starts_at DESC, h.id DESC LIMIT ?`);
   const firstOwnHistory = ownHistoryQuery(false);
   const nextOwnHistory = ownHistoryQuery(true);
@@ -74,23 +80,23 @@ export function createTimetableStore(db) {
     FROM memberships m LEFT JOIN scheduled_shifts s ON s.business_id = m.business_id AND s.staff_id = m.staff_id
       AND s.starts_at < ? AND s.ends_at > ? ${version >= 7 ? 'AND s.active = 1' : ''} ${afterCursor ? 'AND (s.starts_at, s.id) < (?, ?)' : ''}
     LEFT JOIN schedule_locations l ON l.business_id = s.business_id AND l.id = s.location_id
-    WHERE m.issuer = ? AND m.subject = ? AND m.active = 1 AND m.role IN ('VIEWER', 'ADMIN')
+    WHERE m.issuer = ? AND m.subject = ? AND m.active = 1 AND m.role IN ('VIEWER', 'ADMIN') ${epochFilter}
     ORDER BY s.starts_at DESC, s.id DESC LIMIT ?`);
   const firstOwnShifts = version >= 6 ? ownShiftQuery(false) : null;
   const nextOwnShifts = version >= 6 ? ownShiftQuery(true) : null;
   return {
-    async findOwnShifts(issuer, subject, from, to, cursor, limit) {
+    async findOwnShifts(issuer, subject, from, to, cursor, limit, issuedAt) {
       if (!firstOwnShifts) throw new Error('Migration required');
-      const rows = cursor ? nextOwnShifts.all(to, from, cursor.startsAt, cursor.id, issuer, subject, limit) :
-        firstOwnShifts.all(to, from, issuer, subject, limit);
+      const rows = cursor ? nextOwnShifts.all(to, from, cursor.startsAt, cursor.id, issuer, subject, ...tokenArgs(issuedAt), limit) :
+        firstOwnShifts.all(to, from, issuer, subject, ...tokenArgs(issuedAt), limit);
       return rows.length ? rows.filter((row) => row.id !== null) : null;
     },
-    async findOwnHistory(issuer, subject, cursor, limit) {
-      const rows = cursor ? nextOwnHistory.all(cursor.startsAt, cursor.id, issuer, subject, limit) : firstOwnHistory.all(issuer, subject, limit);
+    async findOwnHistory(issuer, subject, cursor, limit, issuedAt) {
+      const rows = cursor ? nextOwnHistory.all(cursor.startsAt, cursor.id, issuer, subject, ...tokenArgs(issuedAt), limit) : firstOwnHistory.all(issuer, subject, ...tokenArgs(issuedAt), limit);
       return rows.length ? rows.filter((row) => row.id !== null) : null;
     },
-    async findAccessAndHistory(issuer, subject, recordId) {
-      const row = authorizedHistory.get(issuer, subject, recordId);
+    async findAccessAndHistory(issuer, subject, recordId, issuedAt) {
+      const row = authorizedHistory.get(issuer, subject, recordId, ...tokenArgs(issuedAt));
       return row ? {
         actor: { businessId: row.businessId, staffId: row.actorStaffId, role: row.role, active: row.active === 1 },
         record: { businessId: row.businessId, staffId: row.recordStaffId, id: row.id, startsAt: row.startsAt, endsAt: row.endsAt },

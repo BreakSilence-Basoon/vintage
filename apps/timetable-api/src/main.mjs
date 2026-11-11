@@ -9,6 +9,7 @@ import { createTimetableStore } from '@vintage/timetable-store';
 import { createLoopbackServer } from './server.mjs';
 import { createAdminHandler } from './admin-handler.mjs';
 import { createAdminScheduleList } from './admin-schedule-list.mjs';
+import { createAdminStaffList } from './admin-staff-list.mjs';
 import { createLoginFlow } from '@vintage/oidc-login';
 import { createMemorySessionStore } from '@vintage/oidc-login/session';
 import { createBrowserAuth } from '@vintage/oidc-login/browser';
@@ -55,9 +56,10 @@ export function prepareService(env, { browserAuth = null } = {}) {
     const read = createHistoryHandler({ ...store, verifyAuthorization });
     const readOwn = createOwnHistoryHandler({ ...store, verifyAuthorization });
     const readSchedule = createOwnScheduleHandler({ ...store, verifyAuthorization });
-    if (allowWrites && ![3, 4, 5, 6, 7, 8, 9].includes(db.prepare('PRAGMA user_version').get().user_version)) throw new Error('Migration required');
+    if (allowWrites && ![3, 4, 5, 6, 7, 8, 9, 10].includes(db.prepare('PRAGMA user_version').get().user_version)) throw new Error('Migration required');
     const write = allowWrites ? createAdminHandler({ db, verifyWriteAuthorization }) : null;
     const listSchedules = allowWrites ? createAdminScheduleList({ db, verifyWriteAuthorization }) : null;
+    const listStaff = allowWrites ? createAdminStaffList({ db, verifyWriteAuthorization }) : null;
     const handle = async (request) => {
       if (browserAuth) {
         const authResponse = await browserAuth.handleAuth(request);
@@ -69,6 +71,7 @@ export function prepareService(env, { browserAuth = null } = {}) {
       if (new URL(request.url).pathname === '/v1/me/history') return readOwn(request);
       if (new URL(request.url).pathname === '/v1/me/shifts') return readSchedule(request);
       if (request.method === 'GET' && listSchedules && new URL(request.url).pathname === '/v1/admin/shifts') return listSchedules(request);
+      if (request.method === 'GET' && listStaff && new URL(request.url).pathname === '/v1/admin/staff') return listStaff(request);
       if (request.method === 'GET' && write && /^\/v1\/admin\/shifts\//.test(new URL(request.url).pathname)) return write(request);
       return request.method === 'POST' && write ? write(request) : read(request);
     };

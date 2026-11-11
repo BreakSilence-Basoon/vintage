@@ -35,14 +35,16 @@ export function createAdminScheduleList({ db, verifyWriteAuthorization } = {}) {
       }
       const filter = status === 'all' ? '' : 'AND s.active = ?';
       const cursorFilter = cursor ? 'AND (s.starts_at, s.id) < (?, ?)' : '';
+      const version = db.prepare('PRAGMA user_version').get().user_version;
       const query = db.prepare(`SELECT s.id, s.staff_id AS staffId, s.location_id AS locationId, l.label AS locationLabel,
         s.starts_at AS startsAt, s.ends_at AS endsAt, s.grace_minutes AS graceMinutes, s.revision, s.active
         FROM memberships m LEFT JOIN scheduled_shifts s ON s.business_id = m.business_id AND s.starts_at < ? AND s.ends_at > ? ${filter} ${cursorFilter}
         LEFT JOIN schedule_locations l ON l.business_id = s.business_id AND l.id = s.location_id
-        WHERE m.issuer = ? AND m.subject = ? AND m.role = 'ADMIN' AND m.active = 1
+        WHERE m.issuer = ? AND m.subject = ? AND m.role = 'ADMIN' AND m.active = 1 ${version >= 10 ? 'AND m.token_valid_after <= ?' : ''}
         ORDER BY s.starts_at DESC, s.id DESC LIMIT ?`);
       const limit = Number(limitText);
-      const rows = query.all(to, from, ...(status === 'all' ? [] : [status === 'active' ? 1 : 0]), ...(cursor ?? []), identity.issuer, identity.subject, limit + 1);
+      const rows = query.all(to, from, ...(status === 'all' ? [] : [status === 'active' ? 1 : 0]), ...(cursor ?? []), identity.issuer, identity.subject,
+        ...(version >= 10 ? [Number.isSafeInteger(identity.issuedAt) && identity.issuedAt >= 0 ? identity.issuedAt : -1] : []), limit + 1);
       if (!rows.length) return reply(404, { error: 'not_found' });
       const records = rows.filter((row) => row.id !== null);
       if (records.some((row) => !id(row.id) || !id(row.staffId) || !id(row.locationId) || typeof row.locationLabel !== 'string' ||

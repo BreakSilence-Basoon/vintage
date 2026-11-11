@@ -36,7 +36,7 @@ export function createHistoryHandler({ verifyAuthorization, findAccessAndHistory
       }
       // Actor and record must come from one consistent server-side read so a
       // role or membership change cannot be paired with a stale decision.
-      const found = await findAccessAndHistory(identity.issuer, identity.subject, match[1]);
+      const found = await findAccessAndHistory(identity.issuer, identity.subject, match[1], identity.issuedAt);
       const { actor, record } = found ?? {};
       if (!actor || !id(actor.businessId) || !id(actor.staffId) || !record || record.id !== match[1] || !id(record.staffId) ||
           !mayAccessTimetable({ actor, resource: record, action: 'history:read' })) {
@@ -70,7 +70,7 @@ export function createOwnHistoryHandler({ verifyAuthorization, findOwnHistory } 
       if (value !== null) {
         try { cursor = parseCursor(value); } catch { return reply(400, { error: 'invalid_request' }); }
       }
-      const records = await findOwnHistory(identity.issuer, identity.subject, cursor, limit + 1);
+      const records = await findOwnHistory(identity.issuer, identity.subject, cursor, limit + 1, identity.issuedAt);
       if (records === null) return reply(404, { error: 'not_found' });
       if (!Array.isArray(records) || records.length > limit + 1 || records.some((record) => !id(record.id) || !timestamp(record.startsAt) ||
           (record.endsAt !== null && (!timestamp(record.endsAt) || record.endsAt < record.startsAt)))) throw new Error('Invalid stored record');
@@ -101,7 +101,7 @@ export function createOwnScheduleHandler({ verifyAuthorization, findOwnShifts } 
         try { cursor = parseCursor(url.searchParams.get('cursor')); } catch { return reply(400, { error: 'invalid_request' }); }
       }
       const limit = Number(limitText);
-      const rows = await findOwnShifts(identity.issuer, identity.subject, from, to, cursor, limit + 1);
+      const rows = await findOwnShifts(identity.issuer, identity.subject, from, to, cursor, limit + 1, identity.issuedAt);
       if (rows === null) return reply(404, { error: 'not_found' });
       if (!Array.isArray(rows) || rows.length > limit + 1 || rows.some((row) => !id(row.id) || !id(row.locationId) ||
           typeof row.locationLabel !== 'string' || row.locationLabel !== row.locationLabel.trim() || !row.locationLabel || row.locationLabel.length > 100 || /[\p{Cc}]/u.test(row.locationLabel) ||

@@ -26,6 +26,7 @@ test('opt-in write HTTP enforces scope, current admin role, tenant and audit', a
     await migrateWithBackup(database, join(temp, 'v6-backup.sqlite'));
     await migrateWithBackup(database, join(temp, 'v7-backup.sqlite'));
     await migrateWithBackup(database, join(temp, 'v8-backup.sqlite'));
+    await migrateWithBackup(database, join(temp, 'v9-backup.sqlite'));
     writer = new DatabaseSync(database);
     writer.prepare('INSERT INTO businesses (id) VALUES (?)').run('shop-b');
     writer.prepare('INSERT INTO staff (business_id,id) VALUES (?,?)').run('shop-b', 'foreign-staff');
@@ -45,7 +46,7 @@ test('opt-in write HTTP enforces scope, current admin role, tenant and audit', a
     assert.throws(() => prepareService({ ...config, VINTAGE_ENABLE_WRITES: 'yes' }));
     writer.exec('PRAGMA user_version = 2');
     assert.throws(() => prepareService(config), /Migration required/);
-    writer.exec('PRAGMA user_version = 9');
+    writer.exec('PRAGMA user_version = 10');
     service = prepareService(config);
     service.server.listen(0, '127.0.0.1');
     await once(service.server, 'listening');
@@ -92,6 +93,14 @@ test('opt-in write HTTP enforces scope, current admin role, tenant and audit', a
     const adminShiftUrl = `${base}/v1/admin/shifts/shift-a`;
     assert.equal((await fetch(adminShiftUrl, { headers: authHeader })).status, 404);
     const adminHeaders = { authorization: `Bearer ${admin}` };
+    const staffUrl = `${base}/v1/admin/staff?limit=1`;
+    assert.equal((await fetch(staffUrl, { headers: authHeader })).status, 404);
+    assert.equal((await fetch(staffUrl, { headers: { authorization: `Bearer ${readOnlyAdmin}` } })).status, 401);
+    const staffFirst = await (await fetch(staffUrl, { headers: adminHeaders })).json();
+    assert.deepEqual(staffFirst.staff, [{ id: 'admin-a', role: 'ADMIN', status: 'active' }]);
+    const staffNext = await (await fetch(`${staffUrl}&cursor=${staffFirst.nextCursor}`, { headers: adminHeaders })).json();
+    assert.deepEqual(staffNext.staff, [{ id: 'staff-a', role: 'VIEWER', status: 'active' }]);
+    assert.equal(staffNext.nextCursor, null);
     const copy = { sourceShiftId: 'shift-a', sourceRevision: 1, shiftId: 'copied-shift', startsAt: '2026-01-02T09:00:00.000Z', endsAt: '2026-01-02T17:00:00.000Z' };
     assert.equal((await post('/v1/admin/shifts/copy', viewer, copy)).status, 403);
     assert.equal((await post('/v1/admin/shifts/copy', admin, { ...copy, sourceRevision: 2 })).status, 409);
@@ -160,9 +169,40 @@ test('opt-in write HTTP enforces scope, current admin role, tenant and audit', a
     assert.equal((await post('/v1/admin/viewers/deactivate', admin, { staffId: 'staff-a' })).status, 200);
     assert.equal((await fetch(base + '/v1/history/record-a', { headers: { authorization: `Bearer ${viewer}` } })).status, 404);
     assert.equal((await fetch(ownUrl, { headers: authHeader })).status, 404);
+    assert.deepEqual((await (await fetch(`${staffUrl}&cursor=admin-a`, { headers: adminHeaders })).json()).staff,
+      [{ id: 'staff-a', role: 'VIEWER', status: 'inactive' }]);
+    assert.equal((await post('/v1/admin/viewers/reactivate', viewer, { staffId: 'staff-a', reason: 'Example restoration' })).status, 403);
+    assert.equal((await post('/v1/admin/viewers/reactivate', admin, { staffId: 'foreign-staff', reason: 'Example restoration' })).status, 409);
+    writer.exec("CREATE TRIGGER reject_reactivation_audit BEFORE INSERT ON membership_reactivation_events BEGIN SELECT RAISE(ABORT, 'test failure'); END");
+    assert.equal((await post('/v1/admin/viewers/reactivate', admin, { staffId: 'staff-a', reason: 'Example restoration' })).status, 503);
+    assert.deepEqual({ ...writer.prepare('SELECT active,token_valid_after FROM memberships WHERE subject = ?').get('example-viewer') }, { active: 0, token_valid_after: 0 });
+    writer.exec('DROP TRIGGER reject_reactivation_audit');
+    assert.equal((await post('/v1/admin/viewers/reactivate', admin, { staffId: 'staff-a', reason: 'Example restoration' })).status, 200);
+    assert.equal((await post('/v1/admin/viewers/reactivate', admin, { staffId: 'staff-a', reason: 'Example restoration' })).status, 409);
+    assert.equal((await fetch(base + '/v1/history/record-a', { headers: authHeader })).status, 404);
+    assert.equal((await fetch(ownUrl, { headers: authHeader })).status, 404);
+    const validAfter = writer.prepare('SELECT token_valid_after FROM memberships WHERE subject = ?').get('example-viewer').token_valid_after;
+    const deadline = Date.now() + 3000;
+    while (Math.floor(Date.now() / 1000) < validAfter && Date.now() < deadline) await new Promise((done) => setTimeout(done, 30));
+    assert.ok(Math.floor(Date.now() / 1000) >= validAfter);
+    const freshViewer = await signed('example-viewer', 'timetable:access');
+    assert.equal((await fetch(base + '/v1/history/record-a', { headers: { authorization: `Bearer ${freshViewer}` } })).status, 200);
+    assert.equal(writer.prepare('SELECT COUNT(*) AS n FROM membership_reactivation_events WHERE actor_staff_id = ?').get('admin-a').n, 1);
+    writer.prepare('UPDATE memberships SET active = 0 WHERE subject = ?').run('example-viewer');
+    writer.prepare('INSERT INTO memberships (issuer,subject,business_id,staff_id,role,active) VALUES (?,?,?,?,?,0)')
+      .run(issuer, 'example-secondary', 'shop-a', 'staff-a', 'VIEWER');
+    assert.deepEqual((await (await fetch(`${staffUrl}&cursor=admin-a`, { headers: adminHeaders })).json()).staff,
+      [{ id: 'staff-a', role: null, status: 'needs_review' }]);
+    assert.equal((await post('/v1/admin/viewers/reactivate', admin, { staffId: 'staff-a', reason: 'Example restoration' })).status, 409);
     assert.equal(writer.prepare('SELECT COUNT(*) AS count FROM authenticated_audit_events').get().count, 3);
     assert.equal(writer.prepare('SELECT COUNT(*) AS count FROM authenticated_audit_events WHERE actor_staff_id = ?').get('admin-a').count, 3);
     assert.equal(writer.prepare('SELECT COUNT(*) AS count FROM history_close_events WHERE actor_staff_id = ?').get('admin-a').count, 1);
+    writer.prepare('UPDATE memberships SET token_valid_after = ? WHERE subject = ?').run(validAfter + 100, 'example-admin');
+    assert.equal((await fetch(staffUrl, { headers: adminHeaders })).status, 404);
+    assert.equal((await fetch(adminList, { headers: adminHeaders })).status, 404);
+    assert.equal((await fetch(adminShiftUrl, { headers: adminHeaders })).status, 404);
+    assert.equal((await post('/v1/admin/viewers', admin, { staffId: 'staff-c', subject: 'example-third' })).status, 403);
+    writer.prepare('UPDATE memberships SET token_valid_after = 0 WHERE subject = ?').run('example-admin');
     writer.prepare('UPDATE memberships SET role = ? WHERE subject = ?').run('VIEWER', 'example-admin');
     assert.equal((await fetch(adminList, { headers: adminHeaders })).status, 404);
     assert.equal((await post('/v1/admin/viewers', admin, { staffId: 'staff-b', subject: 'example-other' })).status, 403);

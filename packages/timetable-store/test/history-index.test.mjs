@@ -52,7 +52,8 @@ test('version 5 migration backs up before adding the owner and time index', asyn
     assert.ok(schedulePlan.some((row) => row.detail.includes('scheduled_shifts_business_time')));
     db.close();
     await migrateWithBackup(path, join(temp, 'backup-v8.sqlite'));
-    await assert.rejects(migrateWithBackup(path, join(temp, 'backup-v9.sqlite')));
+    await migrateWithBackup(path, join(temp, 'backup-v9.sqlite'));
+    await assert.rejects(migrateWithBackup(path, join(temp, 'backup-v10.sqlite')));
   } finally {
     if (snapshot?.isOpen) snapshot.close();
     if (db?.isOpen) db.close();
