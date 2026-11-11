@@ -32,6 +32,7 @@ test('only current admin may change own business, with actor-bound atomic audit'
     const viewer = { issuer, subject: 'example-viewer' };
     applyAuthenticatedOperation(db, admin, 'add-viewer', { staffId: 'staff-a', subject: viewer.subject });
     applyAuthenticatedOperation(db, admin, 'add-history', { staffId: 'staff-a', recordId: 'record-a', startsAt: '2026-01-01T09:00:00.000Z', endsAt: null });
+    assert.throws(() => applyAuthenticatedOperation(db, admin, 'close-history', { recordId: 'record-a', endsAt: '2026-01-01T10:00:00.000Z' }), /Migration required/);
     assert.throws(() => applyAuthenticatedOperation(db, viewer, 'add-history', { staffId: 'staff-a', recordId: 'record-b', startsAt: '2026-01-01T09:00:00.000Z', endsAt: null }));
     assert.throws(() => applyAuthenticatedOperation(db, admin, 'add-viewer', { staffId: 'staff-b', subject: 'example-other', businessId: 'shop-b' }));
     assert.throws(() => applyAuthenticatedOperation(db, admin, 'add-viewer', { staffId: 'staff-b', subject: viewer.subject }));

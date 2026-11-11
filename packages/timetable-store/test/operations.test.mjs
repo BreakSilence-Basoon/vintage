@@ -48,6 +48,7 @@ test('migration backs up old data before transactional operations and audit', as
     assert.throws(() => applyLocalOperation(path, 'add-viewer', { ...person, subject: 'example-new', staffId: 'staff-c', role: 'ADMIN' }));
     assert.throws(() => applyLocalOperation(path, 'add-history', { ...history, recordId: 'record-b', staffId: 'missing' }));
     assert.throws(() => applyLocalOperation(path, 'add-history', { ...history, recordId: 'record-c', endsAt: 'invalid' }));
+    assert.throws(() => applyLocalOperation(path, 'add-history', { ...history, recordId: 'record-d', startsAt: '2026-01-02T09:00:00.000Z' }));
     applyLocalOperation(path, 'deactivate-viewer', { businessId: 'shop-a', staffId: 'staff-a' });
     assert.throws(() => applyLocalOperation(path, 'deactivate-viewer', { businessId: 'shop-a', staffId: 'staff-a' }));
     db = new DatabaseSync(path, { readOnly: true });
