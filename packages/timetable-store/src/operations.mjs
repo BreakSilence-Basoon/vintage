@@ -27,7 +27,7 @@ export async function migrateWithBackup(path, backupPath) {
     db.exec('BEGIN IMMEDIATE');
     try {
       const version = db.prepare('PRAGMA user_version').get().user_version;
-      if (![1, 2, 3, 4, 5, 6, 7, 8].includes(version)) throw new Error('Unsupported migration');
+      if (![1, 2, 3, 4, 5, 6, 7, 8, 9].includes(version)) throw new Error('Unsupported migration');
       createTimetableStore(db);
       await copyTimetableDatabase(path, backupPath);
       if (version === 1) db.exec(`CREATE TABLE audit_events (
@@ -80,7 +80,7 @@ export async function migrateWithBackup(path, backupPath) {
           FOREIGN KEY (business_id, shift_id) REFERENCES scheduled_shifts(business_id, id)
         ); PRAGMA user_version = 7;`);
       else if (version === 7) db.exec('CREATE INDEX scheduled_shifts_business_time ON scheduled_shifts (business_id, starts_at DESC, id DESC); PRAGMA user_version = 8;');
-      else db.exec(`CREATE TABLE schedule_copy_events (
+      else if (version === 8) db.exec(`CREATE TABLE schedule_copy_events (
         id INTEGER PRIMARY KEY, business_id TEXT NOT NULL, actor_staff_id TEXT NOT NULL,
         source_shift_id TEXT NOT NULL, source_revision INTEGER NOT NULL, target_shift_id TEXT NOT NULL,
         target_starts_at TEXT NOT NULL, target_ends_at TEXT NOT NULL, source_snapshot TEXT NOT NULL, created_at TEXT NOT NULL,
@@ -89,6 +89,13 @@ export async function migrateWithBackup(path, backupPath) {
         FOREIGN KEY (business_id, source_shift_id) REFERENCES scheduled_shifts(business_id, id),
         FOREIGN KEY (business_id, target_shift_id) REFERENCES scheduled_shifts(business_id, id)
       ); PRAGMA user_version = 9;`);
+      else db.exec(`ALTER TABLE memberships ADD COLUMN token_valid_after INTEGER NOT NULL DEFAULT 0 CHECK (token_valid_after >= 0);
+      CREATE TABLE membership_reactivation_events (
+        id INTEGER PRIMARY KEY, business_id TEXT NOT NULL, actor_staff_id TEXT NOT NULL,
+        staff_id TEXT NOT NULL, reason TEXT NOT NULL, created_at TEXT NOT NULL,
+        FOREIGN KEY (business_id, actor_staff_id) REFERENCES staff(business_id, id),
+        FOREIGN KEY (business_id, staff_id) REFERENCES staff(business_id, id)
+      ); PRAGMA user_version = 10;`);
       db.exec('COMMIT');
     } catch (error) { db.exec('ROLLBACK'); throw error; }
   } finally { db.close(); }
@@ -111,7 +118,7 @@ export function applyLocalOperation(path, operation, input) {
   const db = openExisting(path);
   try {
     db.exec('PRAGMA foreign_keys = ON');
-    if (![2, 3, 4, 5, 6, 7, 8, 9].includes(db.prepare('PRAGMA user_version').get().user_version)) throw new Error('Migration required');
+    if (![2, 3, 4, 5, 6, 7, 8, 9, 10].includes(db.prepare('PRAGMA user_version').get().user_version)) throw new Error('Migration required');
     db.exec('BEGIN IMMEDIATE');
     try {
       if (operation === 'add-viewer') {

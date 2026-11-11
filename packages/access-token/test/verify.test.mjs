@@ -24,7 +24,7 @@ async function token(overrides = {}, header = {}, key = keyPair.privateKey) {
 
 test('accepts a signed, scoped access token for the configured issuer and client', async () => {
   assert.deepEqual(await verify(`Bearer ${await token()}`), {
-    issuer, subject: 'example-subject', clientId: 'example-client', expiresAt: (now + 300) * 1000,
+    issuer, subject: 'example-subject', clientId: 'example-client', issuedAt: now, expiresAt: (now + 300) * 1000,
   });
   assert.ok(await verify(`bearer ${await token({}, { typ: 'application/at+jwt' })}`));
 });
@@ -37,6 +37,7 @@ test('rejects invalid signatures, issuer, audience, age, type, client, and scope
     await token({ client_id: 'other-client' }), await token({ scope: 'unrelated' }),
     await token({ sub: '' }), await token({ jti: '' }), await token({ client_id: '' }),
     await token({ scope: undefined }),
+    await token({ iat: now - 0.5 }),
   ];
   for (const value of invalid) assert.equal(await verify(`Bearer ${value}`), null);
 });

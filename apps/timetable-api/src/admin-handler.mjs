@@ -5,6 +5,7 @@ const routes = new Map([
   ['/v1/admin/history', 'add-history'],
   ['/v1/admin/history/close', 'close-history'],
   ['/v1/admin/viewers/deactivate', 'deactivate-viewer'],
+  ['/v1/admin/viewers/reactivate', 'reactivate-viewer'],
   ['/v1/admin/locations', 'add-location'],
   ['/v1/admin/shifts', 'add-shift'],
   ['/v1/admin/shifts/update', 'update-shift'],
@@ -23,11 +24,12 @@ export function createAdminHandler({ db, verifyWriteAuthorization } = {}) {
       const identity = await verifyWriteAuthorization(request.headers.get('authorization'));
       if (!identity) return reply(401, { error: 'unauthorized' }, { 'WWW-Authenticate': 'Bearer' });
       try {
+        const version = db.prepare('PRAGMA user_version').get().user_version;
         const row = db.prepare(`SELECT s.id, s.staff_id AS staffId, s.location_id AS locationId, s.starts_at AS startsAt,
           s.ends_at AS endsAt, s.grace_minutes AS graceMinutes, s.revision, s.active FROM memberships m
           JOIN scheduled_shifts s ON s.business_id = m.business_id
-          WHERE m.issuer = ? AND m.subject = ? AND m.role = 'ADMIN' AND m.active = 1 AND s.id = ?`)
-          .get(identity.issuer, identity.subject, match[1]);
+          WHERE m.issuer = ? AND m.subject = ? AND m.role = 'ADMIN' AND m.active = 1 AND s.id = ? ${version >= 10 ? 'AND m.token_valid_after <= ?' : ''}`)
+          .get(identity.issuer, identity.subject, match[1], ...(version >= 10 ? [Number.isSafeInteger(identity.issuedAt) && identity.issuedAt >= 0 ? identity.issuedAt : -1] : []));
         if (!row) return reply(404, { error: 'not_found' });
         return reply(200, { id: row.id, staffId: row.staffId, locationId: row.locationId, startsAt: row.startsAt,
           endsAt: row.endsAt, graceMinutes: row.graceMinutes, revision: row.revision, active: row.active === 1 });

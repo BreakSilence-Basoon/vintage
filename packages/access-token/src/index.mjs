@@ -27,12 +27,12 @@ export function createAccessTokenVerifier({ issuer, audience, clientIds, require
         requiredClaims: ['iss', 'sub', 'aud', 'exp', 'iat', 'jti', 'client_id', 'scope'],
       });
       const type = typeof protectedHeader.typ === 'string' ? protectedHeader.typ.toLowerCase() : '';
-      if (!['at+jwt', 'application/at+jwt'].includes(type) || !nonempty(payload.sub) ||
+      if (!['at+jwt', 'application/at+jwt'].includes(type) || !Number.isSafeInteger(payload.iat) || payload.iat < 0 || !nonempty(payload.sub) ||
           !nonempty(payload.jti) || !nonempty(payload.client_id) || !clients.has(payload.client_id) ||
           typeof payload.scope !== 'string') return null;
       const granted = new Set(payload.scope.split(' ').filter(Boolean));
       if (!scopes.every((scope) => granted.has(scope))) return null;
-      return { issuer, subject: payload.sub, clientId: payload.client_id,
+      return { issuer, subject: payload.sub, clientId: payload.client_id, issuedAt: payload.iat,
         expiresAt: Math.min(payload.exp, payload.iat + 900) * 1000 };
     } catch {
       return null;

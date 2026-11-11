@@ -52,6 +52,7 @@ test('fake OIDC login reaches HTTP authorization, honors current membership and 
     await migrateWithBackup(database, join(temp, 'backup-v6.sqlite'));
     await migrateWithBackup(database, join(temp, 'backup-v7.sqlite'));
     await migrateWithBackup(database, join(temp, 'backup-v8.sqlite'));
+    await migrateWithBackup(database, join(temp, 'backup-v9.sqlite'));
     writer = new DatabaseSync(database);
     const keys = await generateKeyPair('RS256', { extractable: true });
     const publicKey = { ...await exportJWK(keys.publicKey), kid: 'fixture-key', alg: 'RS256', use: 'sig' };
@@ -151,6 +152,9 @@ test('fake OIDC login reaches HTTP authorization, honors current membership and 
     assert.equal((await fetch(`${base}/v1/history/record-a`, { headers: writeHeaders })).status, 404);
     assert.equal((await fetch(`${base}/v1/me/history`, { headers: writeHeaders })).status, 404);
     assert.equal((await fetch(`${base}/v1/me/shifts?${scheduleQuery}`, { headers: writeHeaders })).status, 404);
+    writer.prepare('UPDATE memberships SET active = 1, token_valid_after = ? WHERE subject = ?')
+      .run(Math.floor(Date.now() / 1000) + 1, 'example-user');
+    assert.equal((await fetch(`${base}/v1/me/history`, { headers: writeHeaders })).status, 404);
     const logout = await fetch(`${base}/auth/logout`, { method: 'POST', headers: { ...writeHeaders, origin: publicOrigin } });
     assert.equal(logout.status, 200);
     assert.equal((await fetch(`${base}/v1/history/record-a`, { headers: writeHeaders })).status, 401);

@@ -22,6 +22,8 @@ export function applyAuthenticatedOperation(db, identity, operation, input) {
         (input.endsAt !== null && input.endsAt <= input.startsAt)) throw new AdminRequestError('Invalid request');
   } else if (operation === 'deactivate-viewer') {
     if (!only(input, ['staffId']) || !id(input.staffId)) throw new AdminRequestError('Invalid request');
+  } else if (operation === 'reactivate-viewer') {
+    if (!only(input, ['staffId', 'reason']) || !id(input.staffId) || !reason(input.reason)) throw new AdminRequestError('Invalid request');
   } else if (operation === 'close-history') {
     if (!only(input, ['recordId', 'endsAt']) || !id(input.recordId) || !validTimestamp(input.endsAt)) throw new AdminRequestError('Invalid request');
   } else if (operation === 'add-location') {
@@ -44,16 +46,27 @@ export function applyAuthenticatedOperation(db, identity, operation, input) {
   } else throw new AdminRequestError('Invalid request');
   db.exec('PRAGMA foreign_keys = ON');
   const version = db.prepare('PRAGMA user_version').get().user_version;
-  if (![3, 4, 5, 6, 7, 8, 9].includes(version) || (operation === 'close-history' && version < 4) ||
+  if (![3, 4, 5, 6, 7, 8, 9, 10].includes(version) || (operation === 'close-history' && version < 4) ||
       (['add-location', 'add-shift'].includes(operation) && version < 6) ||
       (['update-shift', 'cancel-shift', 'restore-shift'].includes(operation) && version < 7) ||
-      (operation === 'copy-shift' && version < 9)) throw new Error('Migration required');
+      (operation === 'copy-shift' && version < 9) || (operation === 'reactivate-viewer' && version < 10)) throw new Error('Migration required');
   db.exec('BEGIN IMMEDIATE');
   try {
-    const actor = db.prepare("SELECT business_id, staff_id FROM memberships WHERE issuer = ? AND subject = ? AND role = 'ADMIN' AND active = 1")
-      .get(identity.issuer, identity.subject);
+    const actor = db.prepare(`SELECT business_id, staff_id FROM memberships WHERE issuer = ? AND subject = ? AND role = 'ADMIN' AND active = 1 ${version >= 10 ? 'AND token_valid_after <= ?' : ''}`)
+      .get(identity.issuer, identity.subject, ...(version >= 10 ? [Number.isSafeInteger(identity.issuedAt) && identity.issuedAt >= 0 ? identity.issuedAt : -1] : []));
     if (!actor || !id(actor.business_id) || !id(actor.staff_id)) throw new AdminAccessError('Not authorized');
     const business = actor.business_id;
+    if (operation === 'reactivate-viewer') {
+      const targets = db.prepare('SELECT role,active,token_valid_after FROM memberships WHERE business_id = ? AND staff_id = ?').all(business, input.staffId);
+      if (targets.length !== 1 || targets[0].role !== 'VIEWER' || targets[0].active !== 0) throw new AdminConflictError('Invalid target');
+      const validAfter = Math.max(targets[0].token_valid_after, Math.floor(Date.now() / 1000) + 1);
+      const changed = db.prepare("UPDATE memberships SET active = 1, token_valid_after = ? WHERE business_id = ? AND staff_id = ? AND role = 'VIEWER' AND active = 0")
+        .run(validAfter, business, input.staffId);
+      if (changed.changes !== 1) throw new AdminConflictError('Invalid target');
+      db.prepare('INSERT INTO membership_reactivation_events (business_id,actor_staff_id,staff_id,reason,created_at) VALUES (?,?,?,?,?)')
+        .run(business, actor.staff_id, input.staffId, input.reason, new Date().toISOString());
+      db.exec('COMMIT'); return { replayed: false };
+    }
     if (operation === 'copy-shift') {
       const existing = db.prepare('SELECT staff_id,location_id,starts_at,ends_at,grace_minutes,revision,active FROM scheduled_shifts WHERE business_id = ? AND id = ?').get(business, input.shiftId);
       if (existing) {
