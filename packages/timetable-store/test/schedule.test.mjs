@@ -199,3 +199,95 @@ test('schedule list index failure leaves version 7 and its backup intact', async
     rmSync(temp, { recursive: true, force: true });
   }
 });
+
+test('copy keeps provenance, rejects stale and overlapping sources, and makes retries safe', async () => {
+  const prefix = join(tmpdir(), 'vintage-schedule-copy-');
+  const temp = mkdtempSync(prefix);
+  let db, backup;
+  try {
+    const path = join(temp, 'fixture.sqlite');
+    db = new DatabaseSync(path);
+    initializeTimetableStore(db);
+    db.prepare('INSERT INTO businesses (id) VALUES (?)').run('shop-a');
+    db.prepare('INSERT INTO staff (business_id,id) VALUES (?,?)').run('shop-a', 'admin-a');
+    db.prepare('INSERT INTO memberships (issuer,subject,business_id,staff_id,role,active) VALUES (?,?,?,?,?,1)')
+      .run('https://identity.example.invalid', 'example-admin', 'shop-a', 'admin-a', 'ADMIN');
+    db.close();
+    for (const version of [1, 2, 3, 4, 5, 6, 7, 8]) await migrateWithBackup(path, join(temp, `backup-v${version}.sqlite`));
+    backup = new DatabaseSync(join(temp, 'backup-v8.sqlite'), { readOnly: true });
+    assert.equal(backup.prepare('PRAGMA user_version').get().user_version, 8);
+    db = new DatabaseSync(path);
+    assert.equal(db.prepare('PRAGMA user_version').get().user_version, 9);
+    createTimetableStore(db);
+    const admin = { issuer: 'https://identity.example.invalid', subject: 'example-admin' };
+    const apply = (operation, input) => applyAuthenticatedOperation(db, admin, operation, input);
+    apply('add-location', { locationId: 'location-a', label: 'Example location' });
+    const source = { shiftId: 'source-a', staffId: 'admin-a', locationId: 'location-a', startsAt: '2026-01-01T09:00:00.000Z', endsAt: '2026-01-01T17:00:00.000Z', graceMinutes: 5 };
+    apply('add-shift', source);
+    const copy = { sourceShiftId: 'source-a', sourceRevision: 1, shiftId: 'copy-a', startsAt: '2026-01-02T09:00:00.000Z', endsAt: '2026-01-02T17:00:00.000Z' };
+    assert.throws(() => apply('copy-shift', { ...copy, sourceRevision: 2 }), AdminConflictError);
+    assert.throws(() => apply('copy-shift', { ...copy, startsAt: source.startsAt, endsAt: source.endsAt }), AdminConflictError);
+    assert.deepEqual(apply('copy-shift', copy), { replayed: false });
+    assert.deepEqual(apply('copy-shift', copy), { replayed: true });
+    assert.throws(() => apply('copy-shift', { ...copy, sourceShiftId: 'other' }), AdminConflictError);
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM schedule_copy_events WHERE actor_staff_id = ?').get('admin-a').n, 1);
+    apply('update-shift', { ...source, graceMinutes: 10, expectedRevision: 1, reason: 'Example correction' });
+    assert.deepEqual(apply('copy-shift', copy), { replayed: true });
+    assert.throws(() => apply('copy-shift', { ...copy, shiftId: 'copy-b', startsAt: '2026-01-03T09:00:00.000Z', endsAt: '2026-01-03T17:00:00.000Z' }), AdminConflictError);
+    db.exec("CREATE TRIGGER reject_copy_audit BEFORE INSERT ON schedule_copy_events BEGIN SELECT RAISE(ABORT, 'test failure'); END");
+    assert.throws(() => apply('copy-shift', { ...copy, sourceRevision: 2, shiftId: 'copy-b', startsAt: '2026-01-03T09:00:00.000Z', endsAt: '2026-01-03T17:00:00.000Z' }));
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM scheduled_shifts WHERE id = ?').get('copy-b').n, 0);
+    db.exec('DROP TRIGGER reject_copy_audit');
+    apply('cancel-shift', { shiftId: 'copy-a', expectedRevision: 1, reason: 'Example cancellation' });
+    assert.throws(() => apply('copy-shift', copy), AdminConflictError);
+    db.close();
+    const moduleUrl = new URL('../src/admin.mjs', import.meta.url).href;
+    const program = `import { DatabaseSync } from 'node:sqlite'; import { applyAuthenticatedOperation } from ${JSON.stringify(moduleUrl)};
+      const db = new DatabaseSync(process.argv[1]);
+      try { applyAuthenticatedOperation(db, { issuer: 'https://identity.example.invalid', subject: 'example-admin' }, 'copy-shift',
+        { sourceShiftId: 'source-a', sourceRevision: 2, shiftId: process.argv[2], startsAt: '2026-01-04T09:00:00.000Z', endsAt: '2026-01-04T17:00:00.000Z' }); process.stdout.write('ok'); }
+      catch { process.stdout.write('denied'); } finally { db.close(); }`;
+    const run = (id) => new Promise((done, fail) => {
+      const child = spawn(process.execPath, ['--input-type=module', '-e', program, path, id], { stdio: ['ignore', 'pipe', 'ignore'] });
+      let output = '';
+      child.stdout.on('data', (chunk) => { output += chunk; });
+      child.on('error', fail);
+      child.on('close', (code) => code === 0 ? done(output) : fail(new Error('Test worker failed')));
+    });
+    assert.deepEqual((await Promise.all([run('race-copy-a'), run('race-copy-b')])).sort(), ['denied', 'ok']);
+    db = new DatabaseSync(path, { readOnly: true });
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM schedule_copy_events').get().n, 2);
+  } finally {
+    if (backup?.isOpen) backup.close();
+    if (db?.isOpen) db.close();
+    if (!resolve(temp).startsWith(resolve(prefix))) throw new Error('Unexpected temporary path');
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test('copy migration failure keeps version 8 and the verified backup', async () => {
+  const prefix = join(tmpdir(), 'vintage-copy-schema-failure-');
+  const temp = mkdtempSync(prefix);
+  let db, backup;
+  try {
+    const path = join(temp, 'fixture.sqlite');
+    db = new DatabaseSync(path);
+    initializeTimetableStore(db);
+    db.close();
+    for (const version of [1, 2, 3, 4, 5, 6, 7]) await migrateWithBackup(path, join(temp, `backup-v${version}.sqlite`));
+    db = new DatabaseSync(path);
+    db.exec('CREATE TABLE schedule_copy_events (example TEXT)');
+    db.close();
+    const backupPath = join(temp, 'backup-v8.sqlite');
+    await assert.rejects(migrateWithBackup(path, backupPath));
+    db = new DatabaseSync(path, { readOnly: true });
+    backup = new DatabaseSync(backupPath, { readOnly: true });
+    assert.equal(db.prepare('PRAGMA user_version').get().user_version, 8);
+    assert.equal(backup.prepare('PRAGMA user_version').get().user_version, 8);
+  } finally {
+    if (backup?.isOpen) backup.close();
+    if (db?.isOpen) db.close();
+    if (!resolve(temp).startsWith(resolve(prefix))) throw new Error('Unexpected temporary path');
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
