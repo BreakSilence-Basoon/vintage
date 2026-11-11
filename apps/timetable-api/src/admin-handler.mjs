@@ -5,6 +5,8 @@ const routes = new Map([
   ['/v1/admin/history', 'add-history'],
   ['/v1/admin/history/close', 'close-history'],
   ['/v1/admin/viewers/deactivate', 'deactivate-viewer'],
+  ['/v1/admin/locations', 'add-location'],
+  ['/v1/admin/shifts', 'add-shift'],
 ]);
 const reply = (status, body, extra = {}) => Response.json(body, { status, headers: { 'Cache-Control': 'no-store', ...extra } });
 

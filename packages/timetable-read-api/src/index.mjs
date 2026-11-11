@@ -10,6 +10,15 @@ const timestamp = (value) => {
 const reply = (status, body, extra = {}) => Response.json(body, {
   status, headers: { 'Cache-Control': 'no-store', ...extra },
 });
+function parseCursor(value) {
+  if (typeof value !== 'string' || value.length > 256 || !/^[A-Za-z0-9_-]+$/.test(value)) throw new Error('Invalid cursor');
+  const bytes = Buffer.from(value, 'base64url');
+  if (bytes.toString('base64url') !== value) throw new Error('Invalid cursor');
+  const parts = JSON.parse(bytes.toString('utf8'));
+  if (!Array.isArray(parts) || parts.length !== 2 || !timestamp(parts[0]) || !id(parts[1])) throw new Error('Invalid cursor');
+  return { startsAt: parts[0], id: parts[1] };
+}
+const makeCursor = (record) => Buffer.from(JSON.stringify([record.startsAt, record.id])).toString('base64url');
 
 // These functions are server-owned adapters, not values from request headers.
 export function createHistoryHandler({ verifyAuthorization, findAccessAndHistory } = {}) {
@@ -59,15 +68,7 @@ export function createOwnHistoryHandler({ verifyAuthorization, findOwnHistory } 
       let cursor = null;
       const value = url.searchParams.get('cursor');
       if (value !== null) {
-        if (value.length > 256 || !/^[A-Za-z0-9_-]+$/.test(value)) return reply(400, { error: 'invalid_request' });
-        let parts;
-        try {
-          const bytes = Buffer.from(value, 'base64url');
-          if (bytes.toString('base64url') !== value) throw new Error('Noncanonical cursor');
-          parts = JSON.parse(bytes.toString('utf8'));
-        } catch { return reply(400, { error: 'invalid_request' }); }
-        if (!Array.isArray(parts) || parts.length !== 2 || !timestamp(parts[0]) || !id(parts[1])) return reply(400, { error: 'invalid_request' });
-        cursor = { startsAt: parts[0], id: parts[1] };
+        try { cursor = parseCursor(value); } catch { return reply(400, { error: 'invalid_request' }); }
       }
       const records = await findOwnHistory(identity.issuer, identity.subject, cursor, limit + 1);
       if (records === null) return reply(404, { error: 'not_found' });
@@ -75,8 +76,40 @@ export function createOwnHistoryHandler({ verifyAuthorization, findOwnHistory } 
           (record.endsAt !== null && (!timestamp(record.endsAt) || record.endsAt < record.startsAt)))) throw new Error('Invalid stored record');
       const page = records.slice(0, limit).map(({ id, startsAt, endsAt }) => ({ id, startsAt, endsAt }));
       const last = page.at(-1);
-      const nextCursor = records.length > limit ? Buffer.from(JSON.stringify([last.startsAt, last.id])).toString('base64url') : null;
+      const nextCursor = records.length > limit ? makeCursor(last) : null;
       return reply(200, { records: page, nextCursor });
+    } catch { return reply(503, { error: 'unavailable' }); }
+  };
+}
+
+export function createOwnScheduleHandler({ verifyAuthorization, findOwnShifts } = {}) {
+  if (typeof verifyAuthorization !== 'function' || typeof findOwnShifts !== 'function') throw new Error('Trusted authentication and data adapters are required');
+  return async function handle(request) {
+    try {
+      const url = new URL(request.url);
+      if (request.method !== 'GET' || url.pathname !== '/v1/me/shifts') return reply(404, { error: 'not_found' });
+      const identity = await verifyAuthorization(request.headers.get('authorization'));
+      if (!identity || !identityPart(identity.issuer) || !identityPart(identity.subject)) return reply(401, { error: 'unauthorized' }, { 'WWW-Authenticate': 'Bearer' });
+      if ([...url.searchParams.keys()].some((key) => !['from', 'to', 'limit', 'cursor'].includes(key)) ||
+          ['from', 'to', 'limit', 'cursor'].some((key) => url.searchParams.getAll(key).length > 1)) return reply(400, { error: 'invalid_request' });
+      const from = url.searchParams.get('from'), to = url.searchParams.get('to');
+      const limitText = url.searchParams.get('limit') ?? '50';
+      if (!timestamp(from) || !timestamp(to) || from >= to || Date.parse(to) - Date.parse(from) > 62 * 86400000 ||
+          !/^(?:[1-9]|[1-9][0-9]|100)$/.test(limitText)) return reply(400, { error: 'invalid_request' });
+      let cursor = null;
+      if (url.searchParams.has('cursor')) {
+        try { cursor = parseCursor(url.searchParams.get('cursor')); } catch { return reply(400, { error: 'invalid_request' }); }
+      }
+      const limit = Number(limitText);
+      const rows = await findOwnShifts(identity.issuer, identity.subject, from, to, cursor, limit + 1);
+      if (rows === null) return reply(404, { error: 'not_found' });
+      if (!Array.isArray(rows) || rows.length > limit + 1 || rows.some((row) => !id(row.id) || !id(row.locationId) ||
+          typeof row.locationLabel !== 'string' || row.locationLabel !== row.locationLabel.trim() || !row.locationLabel || row.locationLabel.length > 100 || /[\p{Cc}]/u.test(row.locationLabel) ||
+          !timestamp(row.startsAt) || !timestamp(row.endsAt) || row.endsAt <= row.startsAt ||
+          !Number.isInteger(row.graceMinutes) || row.graceMinutes < 0 || row.graceMinutes > 180)) throw new Error('Invalid stored shift');
+      const shifts = rows.slice(0, limit).map(({ id, locationId, locationLabel, startsAt, endsAt, graceMinutes }) =>
+        ({ id, location: { id: locationId, label: locationLabel }, startsAt, endsAt, graceMinutes }));
+      return reply(200, { shifts, nextCursor: rows.length > limit ? makeCursor(shifts.at(-1)) : null });
     } catch { return reply(503, { error: 'unavailable' }); }
   };
 }
