@@ -101,6 +101,8 @@ test('fake OIDC login reaches HTTP authorization, honors current membership and 
     assert.equal((await fetch(callbackUrl, { headers: { cookie: binding } })).status, 401);
     const headers = { cookie: session };
     assert.equal((await fetch(`${base}/v1/history/record-a`, { headers })).status, 200);
+    const own = await (await fetch(`${base}/v1/me/history`, { headers })).json();
+    assert.deepEqual(own.records.map((item) => item.id), ['record-a']);
     const adminPost = (cookieValue, origin) => fetch(`${base}/v1/admin/viewers`, { method: 'POST',
       headers: { cookie: cookieValue, origin, 'content-type': 'application/json' },
       body: JSON.stringify({ staffId: 'staff-b', subject: 'example-other' }) });
@@ -126,6 +128,7 @@ test('fake OIDC login reaches HTTP authorization, honors current membership and 
     assert.equal((await fetch(`${base}/auth/logout`, { method: 'POST', headers: { ...writeHeaders, origin: 'https://other.example.invalid' } })).status, 403);
     writer.prepare('UPDATE memberships SET active = 0 WHERE subject = ?').run('example-user');
     assert.equal((await fetch(`${base}/v1/history/record-a`, { headers: writeHeaders })).status, 404);
+    assert.equal((await fetch(`${base}/v1/me/history`, { headers: writeHeaders })).status, 404);
     const logout = await fetch(`${base}/auth/logout`, { method: 'POST', headers: { ...writeHeaders, origin: publicOrigin } });
     assert.equal(logout.status, 200);
     assert.equal((await fetch(`${base}/v1/history/record-a`, { headers: writeHeaders })).status, 401);

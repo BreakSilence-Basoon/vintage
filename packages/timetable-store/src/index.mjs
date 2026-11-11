@@ -49,7 +49,16 @@ export function createTimetableStore(db) {
     h.id, h.starts_at AS startsAt, h.ends_at AS endsAt, m.staff_id AS actorStaffId, m.role, m.active
     FROM memberships m JOIN history h ON h.business_id = m.business_id
     WHERE m.issuer = ? AND m.subject = ? AND m.active = 1 AND h.id = ?`);
+  const ownHistory = db.prepare(`SELECT h.id, h.starts_at AS startsAt, h.ends_at AS endsAt
+    FROM memberships m LEFT JOIN history h ON h.business_id = m.business_id AND h.staff_id = m.staff_id
+      AND (? IS NULL OR (h.starts_at, h.id) < (?, ?))
+    WHERE m.issuer = ? AND m.subject = ? AND m.active = 1 AND m.role IN ('VIEWER', 'ADMIN')
+    ORDER BY h.starts_at DESC, h.id DESC LIMIT ?`);
   return {
+    async findOwnHistory(issuer, subject, cursor, limit) {
+      const rows = ownHistory.all(cursor?.startsAt ?? null, cursor?.startsAt ?? null, cursor?.id ?? null, issuer, subject, limit);
+      return rows.length ? rows.filter((row) => row.id !== null) : null;
+    },
     async findAccessAndHistory(issuer, subject, recordId) {
       const row = authorizedHistory.get(issuer, subject, recordId);
       return row ? {
