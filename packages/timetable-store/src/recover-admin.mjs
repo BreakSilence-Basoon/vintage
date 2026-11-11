@@ -15,7 +15,7 @@ export function unlockRecoveredAdmin(path, input) {
     db.exec('PRAGMA foreign_keys = ON');
     db.exec('BEGIN IMMEDIATE');
     try {
-      if (db.prepare('PRAGMA user_version').get().user_version !== 13) throw new Error('Invalid version');
+      if (![13, 14].includes(db.prepare('PRAGMA user_version').get().user_version)) throw new Error('Invalid version');
       createTimetableStore(db);
       const guard = db.prepare('SELECT preparation_id,status FROM recovery_guard WHERE id = 1').get();
       if (!guard || guard.status !== 'pending' || db.prepare('SELECT COUNT(*) AS n FROM memberships WHERE active <> 0').get().n) throw new Error('Invalid recovery state');

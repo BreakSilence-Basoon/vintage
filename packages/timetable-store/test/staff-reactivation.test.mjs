@@ -28,7 +28,7 @@ test('concurrent reactivations create one audit and invalidate earlier tokens', 
     const before = Math.floor(Date.now() / 1000);
     const moduleUrl = new URL('../src/admin.mjs', import.meta.url).href;
     const program = `import { DatabaseSync } from 'node:sqlite'; import { applyAuthenticatedOperation } from ${JSON.stringify(moduleUrl)};
-      const db = new DatabaseSync(process.argv[1]);
+      const db = new DatabaseSync(process.argv[1]); db.exec('PRAGMA busy_timeout=2000');
       try { applyAuthenticatedOperation(db, { issuer: 'https://identity.example.invalid', subject: 'example-admin', issuedAt: Math.floor(Date.now()/1000) }, 'reactivate-viewer',
         { staffId: 'staff-a', reason: 'Example restoration' }); process.stdout.write('ok'); }
       catch { process.stdout.write('denied'); } finally { db.close(); }`;
@@ -39,7 +39,8 @@ test('concurrent reactivations create one audit and invalidate earlier tokens', 
       child.on('error', fail);
       child.on('close', (code) => code === 0 ? done(output) : fail(new Error('Test worker failed')));
     });
-    assert.deepEqual((await Promise.all([run(), run()])).sort(), ['denied', 'ok']);
+    const outcomes = await Promise.all([run(), run()]);
+    assert.deepEqual(outcomes.sort(), ['denied', 'ok']);
     db = new DatabaseSync(path, { readOnly: true });
     const result = db.prepare('SELECT active,token_valid_after FROM memberships WHERE subject = ?').get('example-user');
     assert.equal(result.active, 1);

@@ -110,7 +110,7 @@ test('expired, revoked and concurrently consumed challenges fail closed', async 
     const moduleUrl = new URL('../src/kiosk.mjs', import.meta.url).href;
     const program = `import { DatabaseSync } from 'node:sqlite'; import { consumeKioskChallenge } from ${JSON.stringify(moduleUrl)};
       let challenge = ''; for await (const chunk of process.stdin) challenge += chunk;
-      const db = new DatabaseSync(process.argv[1]);
+      const db = new DatabaseSync(process.argv[1]); db.exec('PRAGMA busy_timeout=2000');
       try { consumeKioskChallenge(db, { issuer: 'https://identity.example.invalid', subject: 'example-user', issuedAt: Math.floor(Date.now()/1000) }, challenge, 'clock-in',
         ({ staffId }) => { db.prepare('INSERT INTO test_effects (staff_id) VALUES (?)').run(staffId); }); process.stdout.write('ok'); }
       catch { process.stdout.write('denied'); } finally { db.close(); }`;
@@ -122,7 +122,8 @@ test('expired, revoked and concurrently consumed challenges fail closed', async 
       child.stdin.end(challenge);
       child.on('close', (code) => code === 0 ? done(output) : fail(new Error('Test worker failed')));
     });
-    assert.deepEqual((await Promise.all([run(), run()])).sort(), ['denied', 'ok']);
+    const outcomes = await Promise.all([run(), run()]);
+    assert.deepEqual(outcomes.sort(), ['denied', 'ok']);
     db = new DatabaseSync(path, { readOnly: true });
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM test_effects').get().n, 1);
   } finally {

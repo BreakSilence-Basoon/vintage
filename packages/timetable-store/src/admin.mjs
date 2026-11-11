@@ -46,7 +46,7 @@ export function applyAuthenticatedOperation(db, identity, operation, input) {
   } else throw new AdminRequestError('Invalid request');
   db.exec('PRAGMA foreign_keys = ON');
   const version = db.prepare('PRAGMA user_version').get().user_version;
-  if (![3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13].includes(version) || (operation === 'close-history' && version < 4) ||
+  if (![3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14].includes(version) || (operation === 'close-history' && version < 4) ||
       (['add-location', 'add-shift'].includes(operation) && version < 6) ||
       (['update-shift', 'cancel-shift', 'restore-shift'].includes(operation) && version < 7) ||
       (operation === 'copy-shift' && version < 9) || (operation === 'reactivate-viewer' && version < 10)) throw new Error('Migration required');
@@ -92,6 +92,7 @@ export function applyAuthenticatedOperation(db, identity, operation, input) {
       db.exec('COMMIT'); return { replayed: false };
     }
     if (['update-shift', 'cancel-shift', 'restore-shift'].includes(operation)) {
+      if (version >= 14 && db.prepare('SELECT 1 FROM scheduled_attendance WHERE business_id=? AND shift_id=?').get(business, input.shiftId)) throw new AdminConflictError('Shift has attendance');
       const old = db.prepare('SELECT staff_id,location_id,starts_at,ends_at,grace_minutes,revision,active FROM scheduled_shifts WHERE business_id = ? AND id = ?').get(business, input.shiftId);
       if (!old || old.revision !== input.expectedRevision || (operation === 'restore-shift' ? old.active !== 0 : old.active !== 1)) throw new AdminConflictError('Shift conflicts');
       const next = operation === 'update-shift' ? { staff_id: input.staffId, location_id: input.locationId, starts_at: input.startsAt,
@@ -136,6 +137,7 @@ export function applyAuthenticatedOperation(db, identity, operation, input) {
       db.exec('COMMIT'); return { replayed: false };
     }
     if (operation === 'close-history') {
+      if (version >= 14 && db.prepare('SELECT 1 FROM scheduled_attendance WHERE business_id=? AND record_id=?').get(business, input.recordId)) throw new AdminConflictError('Record has attendance');
       const record = db.prepare('SELECT staff_id, starts_at, ends_at FROM history WHERE business_id = ? AND id = ?').get(business, input.recordId);
       if (!record || !id(record.staff_id) || !validTimestamp(record.starts_at) || input.endsAt <= record.starts_at) {
         throw new AdminConflictError('Record conflicts');

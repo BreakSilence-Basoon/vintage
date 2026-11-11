@@ -29,7 +29,7 @@ export async function migrateWithBackup(path, backupPath) {
     db.exec('BEGIN IMMEDIATE');
     try {
       const version = db.prepare('PRAGMA user_version').get().user_version;
-      if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].includes(version)) throw new Error('Unsupported migration');
+      if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13].includes(version)) throw new Error('Unsupported migration');
       createTimetableStore(db);
       await copyTimetableDatabase(path, backupPath);
       if (version === 1) db.exec(`CREATE TABLE audit_events (
@@ -116,7 +116,26 @@ export async function migrateWithBackup(path, backupPath) {
       ); CREATE INDEX kiosk_challenges_device_expiry ON kiosk_challenges (business_id,device_id,expires_at);
       PRAGMA user_version = 11;`);
       else if (version === 11) db.exec(restorePreparationSchema);
-      else db.exec(recoveryGuardSchema);
+      else if (version === 12) db.exec(recoveryGuardSchema);
+      else db.exec(`CREATE TABLE scheduled_attendance (
+        business_id TEXT NOT NULL, shift_id TEXT NOT NULL, record_id TEXT NOT NULL, staff_id TEXT NOT NULL,
+        checkin_device_id TEXT NOT NULL, checkout_device_id TEXT,
+        PRIMARY KEY (business_id, shift_id), UNIQUE (business_id, record_id),
+        FOREIGN KEY (business_id, shift_id) REFERENCES scheduled_shifts(business_id, id),
+        FOREIGN KEY (business_id, record_id) REFERENCES history(business_id, id),
+        FOREIGN KEY (business_id, staff_id) REFERENCES staff(business_id, id),
+        FOREIGN KEY (business_id, checkin_device_id) REFERENCES kiosk_devices(business_id, id),
+        FOREIGN KEY (business_id, checkout_device_id) REFERENCES kiosk_devices(business_id, id)
+      ); CREATE TABLE scheduled_attendance_events (
+        id INTEGER PRIMARY KEY, business_id TEXT NOT NULL, shift_id TEXT NOT NULL,
+        staff_id TEXT NOT NULL, device_id TEXT NOT NULL, challenge_digest TEXT NOT NULL UNIQUE,
+        purpose TEXT NOT NULL CHECK (purpose IN ('clock-in', 'clock-out')), created_at TEXT NOT NULL,
+        UNIQUE (business_id, shift_id, purpose),
+        FOREIGN KEY (business_id, shift_id) REFERENCES scheduled_shifts(business_id, id),
+        FOREIGN KEY (business_id, staff_id) REFERENCES staff(business_id, id),
+        FOREIGN KEY (business_id, device_id) REFERENCES kiosk_devices(business_id, id),
+        FOREIGN KEY (challenge_digest) REFERENCES kiosk_challenges(digest)
+      ); PRAGMA user_version = 14;`);
       db.exec('COMMIT');
     } catch (error) { db.exec('ROLLBACK'); throw error; }
   } finally { db.close(); }
@@ -139,7 +158,7 @@ export function applyLocalOperation(path, operation, input) {
   const db = openExisting(path);
   try {
     db.exec('PRAGMA foreign_keys = ON');
-    if (![2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13].includes(db.prepare('PRAGMA user_version').get().user_version)) throw new Error('Migration required');
+    if (![2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14].includes(db.prepare('PRAGMA user_version').get().user_version)) throw new Error('Migration required');
     db.exec('BEGIN IMMEDIATE');
     try {
       if (db.prepare('PRAGMA user_version').get().user_version >= 13 && db.prepare('SELECT status FROM recovery_guard WHERE id = 1').get()?.status === 'pending') throw new Error('Recovery authority review required');
