@@ -30,10 +30,11 @@ export async function migrateWithBackup(path, backupPath) {
     db.exec('PRAGMA foreign_keys = ON');
     db.exec('BEGIN IMMEDIATE');
     try {
-      if (db.prepare('PRAGMA user_version').get().user_version !== 1) throw new Error('Expected version 1');
+      const version = db.prepare('PRAGMA user_version').get().user_version;
+      if (![1, 2].includes(version)) throw new Error('Unsupported migration');
       createTimetableStore(db);
       await copyTimetableDatabase(path, backupPath);
-      db.exec(`CREATE TABLE audit_events (
+      if (version === 1) db.exec(`CREATE TABLE audit_events (
         id INTEGER PRIMARY KEY, business_id TEXT NOT NULL,
         operation TEXT NOT NULL CHECK (operation IN ('add-viewer', 'add-history', 'deactivate-viewer')),
         staff_id TEXT NOT NULL, record_id TEXT, created_at TEXT NOT NULL,
@@ -41,6 +42,14 @@ export async function migrateWithBackup(path, backupPath) {
         FOREIGN KEY (business_id, staff_id) REFERENCES staff(business_id, id),
         FOREIGN KEY (business_id, record_id) REFERENCES history(business_id, id)
       ); PRAGMA user_version = 2;`);
+      else db.exec(`CREATE TABLE authenticated_audit_events (
+        id INTEGER PRIMARY KEY, business_id TEXT NOT NULL, actor_staff_id TEXT NOT NULL,
+        operation TEXT NOT NULL CHECK (operation IN ('add-viewer', 'add-history', 'deactivate-viewer')),
+        staff_id TEXT NOT NULL, record_id TEXT, created_at TEXT NOT NULL,
+        FOREIGN KEY (business_id, actor_staff_id) REFERENCES staff(business_id, id),
+        FOREIGN KEY (business_id, staff_id) REFERENCES staff(business_id, id),
+        FOREIGN KEY (business_id, record_id) REFERENCES history(business_id, id)
+      ); PRAGMA user_version = 3;`);
       db.exec('COMMIT');
     } catch (error) { db.exec('ROLLBACK'); throw error; }
   } finally { db.close(); }
@@ -63,7 +72,7 @@ export function applyLocalOperation(path, operation, input) {
   const db = openExisting(path);
   try {
     db.exec('PRAGMA foreign_keys = ON');
-    if (db.prepare('PRAGMA user_version').get().user_version !== 2) throw new Error('Migration required');
+    if (![2, 3].includes(db.prepare('PRAGMA user_version').get().user_version)) throw new Error('Migration required');
     db.exec('BEGIN IMMEDIATE');
     try {
       if (operation === 'add-viewer') {

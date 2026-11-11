@@ -105,7 +105,12 @@ test('local management command backs up before migration and records changes wit
     assert.equal(run('add-history', { businessId: 'shop-a', staffId: 'staff-a', recordId: 'record-a', startsAt: '2026-01-01T09:00:00.000Z', endsAt: null }).status, 0);
     assert.notEqual(run('deactivate-viewer', { businessId: 'shop-a', staffId: 'admin-a' }).status, 0);
     assert.equal(run('deactivate-viewer', { businessId: 'shop-a', staffId: 'staff-a' }).status, 0);
+    assert.notEqual(run('migrate').status, 0);
+    const migrateAgain = spawnSync(process.execPath, [cli, 'migrate'], { encoding: 'utf8', input: '{}',
+      env: { ...process.env, VINTAGE_DATABASE_FILE: path, VINTAGE_BACKUP_FILE: join(temp, 'backup-v2.sqlite') } });
+    assert.equal(migrateAgain.status, 0);
     db = new DatabaseSync(path, { readOnly: true });
+    assert.equal(db.prepare('PRAGMA user_version').get().user_version, 3);
     assert.equal(db.prepare('SELECT COUNT(*) AS count FROM audit_events').get().count, 3);
     assert.equal(db.prepare('SELECT role FROM memberships WHERE subject = ?').get('example-viewer').role, 'VIEWER');
     assert.equal(db.prepare('SELECT active FROM memberships WHERE subject = ?').get('example-viewer').active, 0);
@@ -144,6 +149,7 @@ test('loopback HTTP verifies signed token and current stored employee access', a
     assert.throws(() => prepareService({ ...config, VINTAGE_DATABASE_FILE: missing }));
     assert.equal(existsSync(missing), false);
     service = prepareService(config);
+    assert.throws(() => service.db.prepare('UPDATE memberships SET active = 0').run());
     service.server.listen(0, '127.0.0.1');
     await once(service.server, 'listening');
     const address = service.server.address();
