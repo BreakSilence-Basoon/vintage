@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@vintage/access-token": "workspace:*",
+    "@vintage/oidc-login": "workspace:*",
     "@vintage/timetable-read-api": "workspace:*",
     "@vintage/timetable-store": "workspace:*",
     "jose": "6.2.17"
