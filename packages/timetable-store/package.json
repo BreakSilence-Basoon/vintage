@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "exports": { ".": "./src/index.mjs", "./backup": "./src/backup.mjs", "./operations": "./src/operations.mjs", "./admin": "./src/admin.mjs", "./kiosk": "./src/kiosk.mjs", "./prepare-restore": "./src/prepare-restore.mjs" },
+  "exports": { ".": "./src/index.mjs", "./backup": "./src/backup.mjs", "./operations": "./src/operations.mjs", "./admin": "./src/admin.mjs", "./kiosk": "./src/kiosk.mjs", "./prepare-restore": "./src/prepare-restore.mjs", "./recover-admin": "./src/recover-admin.mjs" },
   "scripts": { "test": "node --test test/*.test.mjs" },
   "devDependencies": {
     "@vintage/access-token": "workspace:*",

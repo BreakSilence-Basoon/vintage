@@ -41,7 +41,7 @@ export function initializeTimetableStore(db) {
 export function createTimetableStore(db) {
   db.exec('PRAGMA foreign_keys = ON');
   const version = db.prepare('PRAGMA user_version').get().user_version;
-  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].includes(version)) throw new Error('Unsupported database version');
+  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13].includes(version)) throw new Error('Unsupported database version');
   if (version >= 2) db.prepare('SELECT id, business_id, operation, staff_id, record_id, created_at, actor_kind FROM audit_events LIMIT 0');
   if (version >= 3) db.prepare('SELECT id, business_id, actor_staff_id, operation, staff_id, record_id, created_at FROM authenticated_audit_events LIMIT 0');
   if (version >= 4) db.prepare('SELECT id, business_id, actor_staff_id, staff_id, record_id, ends_at, created_at FROM history_close_events LIMIT 0');
@@ -69,6 +69,11 @@ export function createTimetableStore(db) {
     if (!db.prepare("SELECT 1 FROM sqlite_schema WHERE type = 'index' AND name = 'kiosk_challenges_device_expiry' AND tbl_name = 'kiosk_challenges'").get()) throw new Error('Missing challenge index');
   }
   if (version >= 12) db.prepare('SELECT created_at,token_cutoff,disabled_devices,invalidated_challenges,actor_kind FROM restore_preparation_events LIMIT 0');
+  if (version >= 13) {
+    db.prepare('SELECT id,preparation_id,status FROM recovery_guard LIMIT 0');
+    db.prepare('SELECT preparation_id,issuer,subject,business_id,staff_id FROM recovery_admin_candidates LIMIT 0');
+    db.prepare('SELECT preparation_id,business_id,staff_id,reason,created_at,actor_kind FROM recovery_admin_unlock_events LIMIT 0');
+  }
   const epochFilter = version >= 10 ? 'AND m.token_valid_after <= ?' : '';
   const tokenArgs = (issuedAt) => version >= 10 ? [Number.isSafeInteger(issuedAt) && issuedAt >= 0 ? issuedAt : -1] : [];
   const authorizedHistory = db.prepare(`SELECT h.business_id AS businessId, h.staff_id AS recordStaffId,
