@@ -27,7 +27,7 @@ export async function migrateWithBackup(path, backupPath) {
     db.exec('BEGIN IMMEDIATE');
     try {
       const version = db.prepare('PRAGMA user_version').get().user_version;
-      if (![1, 2, 3, 4, 5].includes(version)) throw new Error('Unsupported migration');
+      if (![1, 2, 3, 4, 5, 6].includes(version)) throw new Error('Unsupported migration');
       createTimetableStore(db);
       await copyTimetableDatabase(path, backupPath);
       if (version === 1) db.exec(`CREATE TABLE audit_events (
@@ -55,7 +55,7 @@ export async function migrateWithBackup(path, backupPath) {
         FOREIGN KEY (business_id, record_id) REFERENCES history(business_id, id)
       ); PRAGMA user_version = 4;`);
       else if (version === 4) db.exec('CREATE INDEX history_owner_started_id ON history (business_id, staff_id, starts_at DESC, id DESC); PRAGMA user_version = 5;');
-      else db.exec(`CREATE TABLE schedule_locations (
+      else if (version === 5) db.exec(`CREATE TABLE schedule_locations (
         business_id TEXT NOT NULL, id TEXT NOT NULL, label TEXT NOT NULL,
         PRIMARY KEY (business_id, id), FOREIGN KEY (business_id) REFERENCES businesses(id)
       ); CREATE TABLE scheduled_shifts (
@@ -70,6 +70,15 @@ export async function migrateWithBackup(path, backupPath) {
         target_id TEXT NOT NULL, created_at TEXT NOT NULL,
         FOREIGN KEY (business_id, actor_staff_id) REFERENCES staff(business_id, id)
       ); PRAGMA user_version = 6;`);
+      else db.exec(`ALTER TABLE scheduled_shifts ADD COLUMN revision INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1);
+        ALTER TABLE scheduled_shifts ADD COLUMN active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1));
+        CREATE TABLE schedule_change_events (
+          id INTEGER PRIMARY KEY, business_id TEXT NOT NULL, actor_staff_id TEXT NOT NULL, shift_id TEXT NOT NULL,
+          operation TEXT NOT NULL CHECK (operation IN ('update-shift', 'cancel-shift', 'restore-shift')),
+          reason TEXT NOT NULL, before_json TEXT NOT NULL, after_json TEXT NOT NULL, created_at TEXT NOT NULL,
+          FOREIGN KEY (business_id, actor_staff_id) REFERENCES staff(business_id, id),
+          FOREIGN KEY (business_id, shift_id) REFERENCES scheduled_shifts(business_id, id)
+        ); PRAGMA user_version = 7;`);
       db.exec('COMMIT');
     } catch (error) { db.exec('ROLLBACK'); throw error; }
   } finally { db.close(); }
@@ -92,7 +101,7 @@ export function applyLocalOperation(path, operation, input) {
   const db = openExisting(path);
   try {
     db.exec('PRAGMA foreign_keys = ON');
-    if (![2, 3, 4, 5, 6].includes(db.prepare('PRAGMA user_version').get().user_version)) throw new Error('Migration required');
+    if (![2, 3, 4, 5, 6, 7].includes(db.prepare('PRAGMA user_version').get().user_version)) throw new Error('Migration required');
     db.exec('BEGIN IMMEDIATE');
     try {
       if (operation === 'add-viewer') {

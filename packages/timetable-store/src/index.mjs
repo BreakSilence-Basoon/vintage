@@ -41,7 +41,7 @@ export function initializeTimetableStore(db) {
 export function createTimetableStore(db) {
   db.exec('PRAGMA foreign_keys = ON');
   const version = db.prepare('PRAGMA user_version').get().user_version;
-  if (![1, 2, 3, 4, 5, 6].includes(version)) throw new Error('Unsupported database version');
+  if (![1, 2, 3, 4, 5, 6, 7].includes(version)) throw new Error('Unsupported database version');
   if (version >= 2) db.prepare('SELECT id, business_id, operation, staff_id, record_id, created_at, actor_kind FROM audit_events LIMIT 0');
   if (version >= 3) db.prepare('SELECT id, business_id, actor_staff_id, operation, staff_id, record_id, created_at FROM authenticated_audit_events LIMIT 0');
   if (version >= 4) db.prepare('SELECT id, business_id, actor_staff_id, staff_id, record_id, ends_at, created_at FROM history_close_events LIMIT 0');
@@ -51,6 +51,10 @@ export function createTimetableStore(db) {
     db.prepare('SELECT business_id, id, staff_id, location_id, starts_at, ends_at, grace_minutes FROM scheduled_shifts LIMIT 0');
     db.prepare('SELECT business_id, actor_staff_id, operation, target_id, created_at FROM schedule_create_events LIMIT 0');
     if (!db.prepare("SELECT 1 FROM sqlite_schema WHERE type = 'index' AND name = 'scheduled_shifts_owner_time' AND tbl_name = 'scheduled_shifts'").get()) throw new Error('Missing schedule index');
+  }
+  if (version >= 7) {
+    db.prepare('SELECT revision, active FROM scheduled_shifts LIMIT 0');
+    db.prepare('SELECT business_id, actor_staff_id, shift_id, operation, reason, before_json, after_json, created_at FROM schedule_change_events LIMIT 0');
   }
   const authorizedHistory = db.prepare(`SELECT h.business_id AS businessId, h.staff_id AS recordStaffId,
     h.id, h.starts_at AS startsAt, h.ends_at AS endsAt, m.staff_id AS actorStaffId, m.role, m.active
@@ -66,7 +70,7 @@ export function createTimetableStore(db) {
   const ownShiftQuery = (afterCursor) => db.prepare(`SELECT s.id, s.starts_at AS startsAt, s.ends_at AS endsAt,
     s.grace_minutes AS graceMinutes, l.id AS locationId, l.label AS locationLabel
     FROM memberships m LEFT JOIN scheduled_shifts s ON s.business_id = m.business_id AND s.staff_id = m.staff_id
-      AND s.starts_at < ? AND s.ends_at > ? ${afterCursor ? 'AND (s.starts_at, s.id) < (?, ?)' : ''}
+      AND s.starts_at < ? AND s.ends_at > ? ${version >= 7 ? 'AND s.active = 1' : ''} ${afterCursor ? 'AND (s.starts_at, s.id) < (?, ?)' : ''}
     LEFT JOIN schedule_locations l ON l.business_id = s.business_id AND l.id = s.location_id
     WHERE m.issuer = ? AND m.subject = ? AND m.active = 1 AND m.role IN ('VIEWER', 'ADMIN')
     ORDER BY s.starts_at DESC, s.id DESC LIMIT ?`);
