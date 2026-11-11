@@ -24,7 +24,7 @@ async function token(overrides = {}, header = {}, key = keyPair.privateKey) {
 
 test('accepts a signed, scoped access token for the configured issuer and client', async () => {
   assert.deepEqual(await verify(`Bearer ${await token()}`), {
-    issuer, subject: 'example-subject', clientId: 'example-client',
+    issuer, subject: 'example-subject', clientId: 'example-client', expiresAt: (now + 300) * 1000,
   });
   assert.ok(await verify(`bearer ${await token({}, { typ: 'application/at+jwt' })}`));
 });
@@ -51,6 +51,6 @@ test('requires complete trusted HTTPS configuration', () => {
   for (const change of [
     { issuer: 'http://identity.example.invalid' }, { issuer: 'https://user@localhost' },
     { issuer: 'https://identity.example.invalid?query=1' }, { audience: '' },
-    { clientIds: [] }, { requiredScopes: [] }, { requiredScopes: ['two scopes'] }, { keyResolver: null },
+    { clientIds: [] }, { requiredScopes: [] }, { requiredScopes: ['two scopes'] }, { requiredScopes: ['scope"quoted'] }, { keyResolver: null },
   ]) assert.throws(() => createAccessTokenVerifier({ ...config, ...change }));
 });

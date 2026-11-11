@@ -1,0 +1,10 @@
+{
+  "name": "@vintage/oidc-login",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.mjs", "./session": "./src/session.mjs", "./browser": "./src/browser.mjs" },
+  "scripts": { "test": "node --test test/*.test.mjs" },
+  "dependencies": { "openid-client": "6.8.9" },
+  "devDependencies": { "@vintage/access-token": "workspace:*", "jose": "6.2.17" }
+}
