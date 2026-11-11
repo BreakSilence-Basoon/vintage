@@ -39,7 +39,8 @@ test('version 5 migration backs up before adding the owner and time index', asyn
     assert.equal(rows[0].id, 'record-a');
     db.close();
     await migrateWithBackup(path, join(temp, 'backup-v5.sqlite'));
-    await assert.rejects(migrateWithBackup(path, join(temp, 'backup-v6.sqlite')));
+    await migrateWithBackup(path, join(temp, 'backup-v6.sqlite'));
+    await assert.rejects(migrateWithBackup(path, join(temp, 'backup-v7.sqlite')));
   } finally {
     if (snapshot?.isOpen) snapshot.close();
     if (db?.isOpen) db.close();

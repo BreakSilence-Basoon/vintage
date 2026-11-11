@@ -72,6 +72,42 @@ test('schedule creation isolates tenants, rejects conflicts and records the acto
     db = new DatabaseSync(path, { readOnly: true });
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM scheduled_shifts').get().n, 3);
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM schedule_create_events').get().n, 4);
+    db.close();
+    await migrateWithBackup(path, join(temp, 'backup-v6.sqlite'));
+    db = new DatabaseSync(path);
+    db.prepare('UPDATE memberships SET active = 1 WHERE subject = ?').run('example-user');
+    const update = { ...shift, endsAt: '2026-01-01T16:00:00.000Z', expectedRevision: 1, reason: 'Example correction' };
+    assert.deepEqual(apply(admin, 'update-shift', update), { replayed: false });
+    assert.throws(() => apply(admin, 'update-shift', update), AdminConflictError);
+    assert.throws(() => apply(admin, 'add-shift', shift), AdminConflictError);
+    assert.deepEqual(apply(admin, 'cancel-shift', { shiftId: 'shift-a', expectedRevision: 2, reason: 'Example cancellation' }), { replayed: false });
+    assert.deepEqual(apply(admin, 'add-shift', { ...shift, shiftId: 'shift-c' }), { replayed: false });
+    assert.throws(() => apply(admin, 'restore-shift', { shiftId: 'shift-a', expectedRevision: 3, reason: 'Example restore' }), AdminConflictError);
+    assert.deepEqual(apply(admin, 'cancel-shift', { shiftId: 'shift-c', expectedRevision: 1, reason: 'Example cancellation' }), { replayed: false });
+    assert.deepEqual(apply(admin, 'restore-shift', { shiftId: 'shift-a', expectedRevision: 3, reason: 'Example restore' }), { replayed: false });
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM schedule_change_events').get().n, 4);
+    assert.deepEqual({ ...db.prepare('SELECT active, revision FROM scheduled_shifts WHERE id = ?').get('shift-a') }, { active: 1, revision: 4 });
+    db.exec("CREATE TRIGGER reject_schedule_change BEFORE INSERT ON schedule_change_events BEGIN SELECT RAISE(ABORT, 'test failure'); END");
+    assert.throws(() => apply(admin, 'cancel-shift', { shiftId: 'shift-a', expectedRevision: 4, reason: 'Example cancellation' }));
+    assert.deepEqual({ ...db.prepare('SELECT active, revision FROM scheduled_shifts WHERE id = ?').get('shift-a') }, { active: 1, revision: 4 });
+    db.exec('DROP TRIGGER reject_schedule_change');
+    db.close();
+    const updateProgram = `import { DatabaseSync } from 'node:sqlite'; import { applyAuthenticatedOperation } from ${JSON.stringify(moduleUrl)};
+      const db = new DatabaseSync(process.argv[1]);
+      try { applyAuthenticatedOperation(db, { issuer: 'https://identity.example.invalid', subject: 'example-admin' }, 'cancel-shift',
+        { shiftId: 'shift-a', expectedRevision: 4, reason: 'Example cancellation' }); process.stdout.write('ok'); }
+      catch { process.stdout.write('denied'); } finally { db.close(); }`;
+    const runUpdate = () => new Promise((done, fail) => {
+      const child = spawn(process.execPath, ['--input-type=module', '-e', updateProgram, path], { stdio: ['ignore', 'pipe', 'ignore'] });
+      let output = '';
+      child.stdout.on('data', (chunk) => { output += chunk; });
+      child.on('error', fail);
+      child.on('close', (code) => code === 0 ? done(output) : fail(new Error('Test worker failed')));
+    });
+    assert.deepEqual((await Promise.all([runUpdate(), runUpdate()])).sort(), ['denied', 'ok']);
+    db = new DatabaseSync(path, { readOnly: true });
+    assert.deepEqual({ ...db.prepare('SELECT active, revision FROM scheduled_shifts WHERE id = ?').get('shift-a') }, { active: 0, revision: 5 });
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM schedule_change_events').get().n, 5);
   } finally {
     if (backup?.isOpen) backup.close();
     if (db?.isOpen) db.close();
@@ -100,6 +136,34 @@ test('schedule migration failure preserves the version 5 database and backup', a
     assert.equal(db.prepare('PRAGMA user_version').get().user_version, 5);
     assert.equal(backup.prepare('PRAGMA user_version').get().user_version, 5);
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM sqlite_schema WHERE name = 'schedule_locations'").get().n, 0);
+  } finally {
+    if (backup?.isOpen) backup.close();
+    if (db?.isOpen) db.close();
+    if (!resolve(temp).startsWith(resolve(prefix))) throw new Error('Unexpected temporary path');
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test('schedule revision migration failure keeps version 6 and its verified backup', async () => {
+  const prefix = join(tmpdir(), 'vintage-schedule-revision-failure-');
+  const temp = mkdtempSync(prefix);
+  let db, backup;
+  try {
+    const path = join(temp, 'fixture.sqlite');
+    db = new DatabaseSync(path);
+    initializeTimetableStore(db);
+    db.close();
+    for (const version of [1, 2, 3, 4, 5]) await migrateWithBackup(path, join(temp, `backup-v${version}.sqlite`));
+    db = new DatabaseSync(path);
+    db.exec('ALTER TABLE scheduled_shifts ADD COLUMN revision INTEGER');
+    db.close();
+    const backupPath = join(temp, 'backup-v6.sqlite');
+    await assert.rejects(migrateWithBackup(path, backupPath));
+    db = new DatabaseSync(path, { readOnly: true });
+    backup = new DatabaseSync(backupPath, { readOnly: true });
+    assert.equal(db.prepare('PRAGMA user_version').get().user_version, 6);
+    assert.equal(backup.prepare('PRAGMA user_version').get().user_version, 6);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM sqlite_schema WHERE name = 'schedule_change_events'").get().n, 0);
   } finally {
     if (backup?.isOpen) backup.close();
     if (db?.isOpen) db.close();

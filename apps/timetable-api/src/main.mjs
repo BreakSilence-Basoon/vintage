@@ -54,7 +54,7 @@ export function prepareService(env, { browserAuth = null } = {}) {
     const read = createHistoryHandler({ ...store, verifyAuthorization });
     const readOwn = createOwnHistoryHandler({ ...store, verifyAuthorization });
     const readSchedule = createOwnScheduleHandler({ ...store, verifyAuthorization });
-    if (allowWrites && ![3, 4, 5, 6].includes(db.prepare('PRAGMA user_version').get().user_version)) throw new Error('Migration required');
+    if (allowWrites && ![3, 4, 5, 6, 7].includes(db.prepare('PRAGMA user_version').get().user_version)) throw new Error('Migration required');
     const write = allowWrites ? createAdminHandler({ db, verifyWriteAuthorization }) : null;
     const handle = async (request) => {
       if (browserAuth) {
@@ -66,6 +66,7 @@ export function prepareService(env, { browserAuth = null } = {}) {
       }
       if (new URL(request.url).pathname === '/v1/me/history') return readOwn(request);
       if (new URL(request.url).pathname === '/v1/me/shifts') return readSchedule(request);
+      if (request.method === 'GET' && write && /^\/v1\/admin\/shifts\//.test(new URL(request.url).pathname)) return write(request);
       return request.method === 'POST' && write ? write(request) : read(request);
     };
     return { server: createLoopbackServer(handle, { allowWrites, browserLogin: !!browserAuth }), db, port };

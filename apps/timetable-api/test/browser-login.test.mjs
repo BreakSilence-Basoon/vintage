@@ -49,6 +49,7 @@ test('fake OIDC login reaches HTTP authorization, honors current membership and 
     await migrateWithBackup(database, join(temp, 'backup-v3.sqlite'));
     await migrateWithBackup(database, join(temp, 'backup-v4.sqlite'));
     await migrateWithBackup(database, join(temp, 'backup-v5.sqlite'));
+    await migrateWithBackup(database, join(temp, 'backup-v6.sqlite'));
     writer = new DatabaseSync(database);
     const keys = await generateKeyPair('RS256', { extractable: true });
     const publicKey = { ...await exportJWK(keys.publicKey), kid: 'fixture-key', alg: 'RS256', use: 'sig' };
@@ -132,6 +133,8 @@ test('fake OIDC login reaches HTTP authorization, honors current membership and 
       headers: { cookie: writeSession, origin: publicOrigin, 'content-type': 'application/json' }, body: JSON.stringify(data) });
     assert.equal((await schedulePost('/v1/admin/locations', { locationId: 'location-a', label: 'Example location' })).status, 200);
     assert.equal((await schedulePost('/v1/admin/shifts', { shiftId: 'shift-a', staffId: 'staff-a', locationId: 'location-a', startsAt: '2026-01-01T09:00:00.000Z', endsAt: '2026-01-01T17:00:00.000Z', graceMinutes: 0 })).status, 200);
+    assert.equal((await schedulePost('/v1/admin/shifts/cancel', { shiftId: 'shift-a', expectedRevision: 1, reason: 'Example cancellation' })).status, 200);
+    assert.equal((await schedulePost('/v1/admin/shifts/restore', { shiftId: 'shift-a', expectedRevision: 2, reason: 'Example restore' })).status, 200);
     writer.prepare('UPDATE memberships SET role = ? WHERE subject = ?').run('VIEWER', 'example-user');
     assert.equal((await adminPost(writeSession, publicOrigin)).status, 403);
     const writeHeaders = { cookie: writeSession };
