@@ -42,6 +42,35 @@ test('backs up and restores into new files without overwriting existing files', 
   }
 });
 
+test('backs up a live WAL database into a standalone copy without staging sidecars', async () => {
+  const prefix = join(tmpdir(), 'vintage-backup-wal-');
+  const temp = mkdtempSync(prefix);
+  let source, snapshot;
+  try {
+    const original = join(temp, 'original.sqlite'), output = join(temp, 'backup.sqlite');
+    source = new DatabaseSync(original);
+    initializeTimetableStore(source);
+    source.exec('PRAGMA journal_mode = WAL');
+    source.prepare('INSERT INTO businesses (id) VALUES (?)').run('shop-a');
+    source.prepare('INSERT INTO staff (business_id,id) VALUES (?,?)').run('shop-a', 'staff-a');
+    source.prepare('INSERT INTO history (business_id,id,staff_id,starts_at) VALUES (?,?,?,?)')
+      .run('shop-a', 'record-a', 'staff-a', '2026-01-01T09:00:00.000Z');
+    assert.ok(statSync(`${original}-wal`).size > 0);
+    await copyTimetableDatabase(original, output);
+    assert.equal(readdirSync(temp).some((name) => name.startsWith('.vintage-copy-')), false);
+    assert.equal(existsSync(`${output}-wal`), false);
+    assert.equal(existsSync(`${output}-shm`), false);
+    snapshot = new DatabaseSync(output, { readOnly: true });
+    assert.equal(snapshot.prepare('SELECT COUNT(*) AS n FROM history').get().n, 1);
+    assert.equal(snapshot.prepare('PRAGMA journal_mode').get().journal_mode, 'delete');
+  } finally {
+    if (snapshot?.isOpen) snapshot.close();
+    if (source?.isOpen) source.close();
+    if (!resolve(temp).startsWith(resolve(prefix))) throw new Error('Unexpected temporary path');
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
 test('rejects missing or incompatible sources without creating a destination', async () => {
   const prefix = join(tmpdir(), 'vintage-backup-invalid-');
   const temp = mkdtempSync(prefix);

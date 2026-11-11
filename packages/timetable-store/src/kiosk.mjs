@@ -13,7 +13,7 @@ function transaction(db, operation) {
     db.exec('PRAGMA foreign_keys = ON');
     db.exec('BEGIN IMMEDIATE');
     begun = true;
-    if (db.prepare('PRAGMA user_version').get().user_version !== 11) throw new Error('Invalid version');
+    if (![11, 12].includes(db.prepare('PRAGMA user_version').get().user_version)) throw new Error('Invalid version');
     const result = operation();
     if (result && typeof result.then === 'function') throw new Error('Asynchronous operation');
     db.exec('COMMIT');

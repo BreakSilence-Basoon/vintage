@@ -46,7 +46,7 @@ export function applyAuthenticatedOperation(db, identity, operation, input) {
   } else throw new AdminRequestError('Invalid request');
   db.exec('PRAGMA foreign_keys = ON');
   const version = db.prepare('PRAGMA user_version').get().user_version;
-  if (![3, 4, 5, 6, 7, 8, 9, 10, 11].includes(version) || (operation === 'close-history' && version < 4) ||
+  if (![3, 4, 5, 6, 7, 8, 9, 10, 11, 12].includes(version) || (operation === 'close-history' && version < 4) ||
       (['add-location', 'add-shift'].includes(operation) && version < 6) ||
       (['update-shift', 'cancel-shift', 'restore-shift'].includes(operation) && version < 7) ||
       (operation === 'copy-shift' && version < 9) || (operation === 'reactivate-viewer' && version < 10)) throw new Error('Migration required');
