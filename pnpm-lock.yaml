@@ -13,6 +13,9 @@ importers:
       '@vintage/access-token':
         specifier: workspace:*
         version: link:../../packages/access-token
+      '@vintage/oidc-login':
+        specifier: workspace:*
+        version: link:../../packages/oidc-login
       '@vintage/timetable-read-api':
         specifier: workspace:*
         version: link:../../packages/timetable-read-api

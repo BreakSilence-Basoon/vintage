@@ -8,6 +8,9 @@ import { createHistoryHandler } from '@vintage/timetable-read-api';
 import { createTimetableStore } from '@vintage/timetable-store';
 import { createLoopbackServer } from './server.mjs';
 import { createAdminHandler } from './admin-handler.mjs';
+import { createLoginFlow } from '@vintage/oidc-login';
+import { createMemorySessionStore } from '@vintage/oidc-login/session';
+import { createBrowserAuth } from '@vintage/oidc-login/browser';
 
 function publicKeys(path) {
   if (!isAbsolute(path) || statSync(path).size > 1024 * 1024) throw new Error('Invalid key file');
@@ -27,7 +30,7 @@ function publicKeys(path) {
   return createLocalJWKSet(jwks);
 }
 
-export function prepareService(env) {
+export function prepareService(env, { browserAuth = null } = {}) {
   const { VINTAGE_ISSUER: issuer, VINTAGE_AUDIENCE: audience, VINTAGE_CLIENT_ID: client,
     VINTAGE_REQUIRED_SCOPE: scope, VINTAGE_JWKS_FILE: keyFile, VINTAGE_DATABASE_FILE: databaseFile,
     VINTAGE_PORT: portText, VINTAGE_ENABLE_WRITES: writesText, VINTAGE_WRITE_SCOPE: writeScope } = env;
@@ -50,17 +53,53 @@ export function prepareService(env) {
     const read = createHistoryHandler({ ...createTimetableStore(db), verifyAuthorization });
     if (allowWrites && ![3, 4].includes(db.prepare('PRAGMA user_version').get().user_version)) throw new Error('Migration required');
     const write = allowWrites ? createAdminHandler({ db, verifyWriteAuthorization }) : null;
-    const handle = (request) => request.method === 'POST' && write ? write(request) : read(request);
-    return { server: createLoopbackServer(handle, { allowWrites }), db, port };
+    const handle = async (request) => {
+      if (browserAuth) {
+        const authResponse = await browserAuth.handleAuth(request);
+        if (authResponse) return authResponse;
+        const authorized = await browserAuth.authorize(request);
+        if (authorized.response) return authorized.response;
+        request = authorized.request;
+      }
+      return request.method === 'POST' && write ? write(request) : read(request);
+    };
+    return { server: createLoopbackServer(handle, { allowWrites, browserLogin: !!browserAuth }), db, port };
   } catch (error) {
     db.close();
     throw error;
   }
 }
 
+// fetchImplementation is a trusted test adapter, never controlled by a request.
+export async function prepareBrowserService(env, { fetchImplementation } = {}) {
+  const { VINTAGE_ISSUER: issuer, VINTAGE_AUDIENCE: audience, VINTAGE_CLIENT_ID: clientId,
+    VINTAGE_REQUIRED_SCOPE: readScope, VINTAGE_WRITE_SCOPE: writeScope, VINTAGE_ENABLE_WRITES: writes,
+    VINTAGE_JWKS_FILE: keyFile, VINTAGE_PUBLIC_ORIGIN: publicOrigin, VINTAGE_CLIENT_SECRET_FILE: secretFile } = env;
+  let origin;
+  try { origin = new URL(publicOrigin); } catch { throw new Error('Invalid public origin'); }
+  if (origin.protocol !== 'https:' || origin.origin !== publicOrigin || origin.username || origin.password || origin.pathname !== '/' || origin.search || origin.hash) {
+    throw new Error('Invalid public origin');
+  }
+  if (!secretFile || !isAbsolute(secretFile)) throw new Error('Invalid secret file');
+  const info = lstatSync(secretFile);
+  if (!info.isFile() || info.size < 1 || info.size > 8192) throw new Error('Invalid secret file');
+  const clientSecret = readFileSync(secretFile, 'utf8').trim();
+  if (!clientSecret) throw new Error('Invalid secret file');
+  const keyResolver = publicKeys(keyFile);
+  const verifyAccessToken = createAccessTokenVerifier({ issuer, audience, clientIds: [clientId], requiredScopes: [readScope], keyResolver });
+  const verifyWriteAccessToken = writes === 'true' ? createAccessTokenVerifier({ issuer, audience, clientIds: [clientId], requiredScopes: [readScope, writeScope], keyResolver }) : undefined;
+  const flow = await createLoginFlow({ issuer, clientId, clientSecret, redirectUri: `${publicOrigin}/auth/callback`, audience,
+    readScope, writeScope: writes === 'true' ? writeScope : undefined, verifyAccessToken, verifyWriteAccessToken, fetchImplementation });
+  const sessions = createMemorySessionStore({ verifyAccessToken });
+  const browserAuth = createBrowserAuth({ publicOrigin, flow, sessions });
+  return prepareService(env, { browserAuth });
+}
+
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
-    const { server, db, port } = prepareService(process.env);
+    const enabled = process.env.VINTAGE_ENABLE_BROWSER_LOGIN;
+    if (enabled !== undefined && enabled !== 'true' && enabled !== 'false') throw new Error('Invalid login setting');
+    const { server, db, port } = enabled === 'true' ? await prepareBrowserService(process.env) : prepareService(process.env);
     server.on('error', () => { db.close(); process.exitCode = 1; });
     server.on('close', () => { if (db.isOpen) db.close(); });
     server.listen(port, '127.0.0.1');
