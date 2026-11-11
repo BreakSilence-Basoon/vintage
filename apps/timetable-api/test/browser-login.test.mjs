@@ -50,6 +50,7 @@ test('fake OIDC login reaches HTTP authorization, honors current membership and 
     await migrateWithBackup(database, join(temp, 'backup-v4.sqlite'));
     await migrateWithBackup(database, join(temp, 'backup-v5.sqlite'));
     await migrateWithBackup(database, join(temp, 'backup-v6.sqlite'));
+    await migrateWithBackup(database, join(temp, 'backup-v7.sqlite'));
     writer = new DatabaseSync(database);
     const keys = await generateKeyPair('RS256', { extractable: true });
     const publicKey = { ...await exportJWK(keys.publicKey), kid: 'fixture-key', alg: 'RS256', use: 'sig' };
@@ -135,11 +136,14 @@ test('fake OIDC login reaches HTTP authorization, honors current membership and 
     assert.equal((await schedulePost('/v1/admin/shifts', { shiftId: 'shift-a', staffId: 'staff-a', locationId: 'location-a', startsAt: '2026-01-01T09:00:00.000Z', endsAt: '2026-01-01T17:00:00.000Z', graceMinutes: 0 })).status, 200);
     assert.equal((await schedulePost('/v1/admin/shifts/cancel', { shiftId: 'shift-a', expectedRevision: 1, reason: 'Example cancellation' })).status, 200);
     assert.equal((await schedulePost('/v1/admin/shifts/restore', { shiftId: 'shift-a', expectedRevision: 2, reason: 'Example restore' })).status, 200);
+    const adminScheduleQuery = new URLSearchParams({ from: '2026-01-01T00:00:00.000Z', to: '2026-01-02T00:00:00.000Z' });
+    assert.deepEqual((await (await fetch(`${base}/v1/admin/shifts?${adminScheduleQuery}`, { headers: { cookie: writeSession } })).json()).shifts.map((item) => item.id), ['shift-a']);
     writer.prepare('UPDATE memberships SET role = ? WHERE subject = ?').run('VIEWER', 'example-user');
     assert.equal((await adminPost(writeSession, publicOrigin)).status, 403);
     const writeHeaders = { cookie: writeSession };
     const scheduleQuery = new URLSearchParams({ from: '2026-01-01T00:00:00.000Z', to: '2026-01-02T00:00:00.000Z' });
     assert.deepEqual((await (await fetch(`${base}/v1/me/shifts?${scheduleQuery}`, { headers: writeHeaders })).json()).shifts.map((item) => item.id), ['shift-a']);
+    assert.equal((await fetch(`${base}/v1/admin/shifts?${scheduleQuery}`, { headers: writeHeaders })).status, 404);
     assert.equal((await fetch(`${base}/auth/logout`, { method: 'POST', headers: { ...writeHeaders, origin: 'https://other.example.invalid' } })).status, 403);
     writer.prepare('UPDATE memberships SET active = 0 WHERE subject = ?').run('example-user');
     assert.equal((await fetch(`${base}/v1/history/record-a`, { headers: writeHeaders })).status, 404);

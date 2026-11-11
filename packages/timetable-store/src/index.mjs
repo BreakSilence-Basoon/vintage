@@ -41,7 +41,7 @@ export function initializeTimetableStore(db) {
 export function createTimetableStore(db) {
   db.exec('PRAGMA foreign_keys = ON');
   const version = db.prepare('PRAGMA user_version').get().user_version;
-  if (![1, 2, 3, 4, 5, 6, 7].includes(version)) throw new Error('Unsupported database version');
+  if (![1, 2, 3, 4, 5, 6, 7, 8].includes(version)) throw new Error('Unsupported database version');
   if (version >= 2) db.prepare('SELECT id, business_id, operation, staff_id, record_id, created_at, actor_kind FROM audit_events LIMIT 0');
   if (version >= 3) db.prepare('SELECT id, business_id, actor_staff_id, operation, staff_id, record_id, created_at FROM authenticated_audit_events LIMIT 0');
   if (version >= 4) db.prepare('SELECT id, business_id, actor_staff_id, staff_id, record_id, ends_at, created_at FROM history_close_events LIMIT 0');
@@ -56,6 +56,7 @@ export function createTimetableStore(db) {
     db.prepare('SELECT revision, active FROM scheduled_shifts LIMIT 0');
     db.prepare('SELECT business_id, actor_staff_id, shift_id, operation, reason, before_json, after_json, created_at FROM schedule_change_events LIMIT 0');
   }
+  if (version >= 8 && !db.prepare("SELECT 1 FROM sqlite_schema WHERE type = 'index' AND name = 'scheduled_shifts_business_time' AND tbl_name = 'scheduled_shifts'").get()) throw new Error('Missing schedule index');
   const authorizedHistory = db.prepare(`SELECT h.business_id AS businessId, h.staff_id AS recordStaffId,
     h.id, h.starts_at AS startsAt, h.ends_at AS endsAt, m.staff_id AS actorStaffId, m.role, m.active
     FROM memberships m JOIN history h ON h.business_id = m.business_id
