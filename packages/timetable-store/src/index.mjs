@@ -41,11 +41,17 @@ export function initializeTimetableStore(db) {
 export function createTimetableStore(db) {
   db.exec('PRAGMA foreign_keys = ON');
   const version = db.prepare('PRAGMA user_version').get().user_version;
-  if (![1, 2, 3, 4, 5].includes(version)) throw new Error('Unsupported database version');
+  if (![1, 2, 3, 4, 5, 6].includes(version)) throw new Error('Unsupported database version');
   if (version >= 2) db.prepare('SELECT id, business_id, operation, staff_id, record_id, created_at, actor_kind FROM audit_events LIMIT 0');
   if (version >= 3) db.prepare('SELECT id, business_id, actor_staff_id, operation, staff_id, record_id, created_at FROM authenticated_audit_events LIMIT 0');
   if (version >= 4) db.prepare('SELECT id, business_id, actor_staff_id, staff_id, record_id, ends_at, created_at FROM history_close_events LIMIT 0');
   if (version >= 5 && !db.prepare("SELECT 1 FROM sqlite_schema WHERE type = 'index' AND name = 'history_owner_started_id' AND tbl_name = 'history'").get()) throw new Error('Missing history index');
+  if (version >= 6) {
+    db.prepare('SELECT business_id, id, label FROM schedule_locations LIMIT 0');
+    db.prepare('SELECT business_id, id, staff_id, location_id, starts_at, ends_at, grace_minutes FROM scheduled_shifts LIMIT 0');
+    db.prepare('SELECT business_id, actor_staff_id, operation, target_id, created_at FROM schedule_create_events LIMIT 0');
+    if (!db.prepare("SELECT 1 FROM sqlite_schema WHERE type = 'index' AND name = 'scheduled_shifts_owner_time' AND tbl_name = 'scheduled_shifts'").get()) throw new Error('Missing schedule index');
+  }
   const authorizedHistory = db.prepare(`SELECT h.business_id AS businessId, h.staff_id AS recordStaffId,
     h.id, h.starts_at AS startsAt, h.ends_at AS endsAt, m.staff_id AS actorStaffId, m.role, m.active
     FROM memberships m JOIN history h ON h.business_id = m.business_id
@@ -57,7 +63,22 @@ export function createTimetableStore(db) {
     ORDER BY h.starts_at DESC, h.id DESC LIMIT ?`);
   const firstOwnHistory = ownHistoryQuery(false);
   const nextOwnHistory = ownHistoryQuery(true);
+  const ownShiftQuery = (afterCursor) => db.prepare(`SELECT s.id, s.starts_at AS startsAt, s.ends_at AS endsAt,
+    s.grace_minutes AS graceMinutes, l.id AS locationId, l.label AS locationLabel
+    FROM memberships m LEFT JOIN scheduled_shifts s ON s.business_id = m.business_id AND s.staff_id = m.staff_id
+      AND s.starts_at < ? AND s.ends_at > ? ${afterCursor ? 'AND (s.starts_at, s.id) < (?, ?)' : ''}
+    LEFT JOIN schedule_locations l ON l.business_id = s.business_id AND l.id = s.location_id
+    WHERE m.issuer = ? AND m.subject = ? AND m.active = 1 AND m.role IN ('VIEWER', 'ADMIN')
+    ORDER BY s.starts_at DESC, s.id DESC LIMIT ?`);
+  const firstOwnShifts = version >= 6 ? ownShiftQuery(false) : null;
+  const nextOwnShifts = version >= 6 ? ownShiftQuery(true) : null;
   return {
+    async findOwnShifts(issuer, subject, from, to, cursor, limit) {
+      if (!firstOwnShifts) throw new Error('Migration required');
+      const rows = cursor ? nextOwnShifts.all(to, from, cursor.startsAt, cursor.id, issuer, subject, limit) :
+        firstOwnShifts.all(to, from, issuer, subject, limit);
+      return rows.length ? rows.filter((row) => row.id !== null) : null;
+    },
     async findOwnHistory(issuer, subject, cursor, limit) {
       const rows = cursor ? nextOwnHistory.all(cursor.startsAt, cursor.id, issuer, subject, limit) : firstOwnHistory.all(issuer, subject, limit);
       return rows.length ? rows.filter((row) => row.id !== null) : null;

@@ -3,6 +3,7 @@ import { historyOverlaps, validTimestamp } from './history-rules.mjs';
 const id = (value) => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 const subject = (value) => typeof value === 'string' && value.length > 0 && value.length <= 512 && value === value.trim();
 const only = (value, keys) => Object.keys(value).every((key) => keys.includes(key));
+const label = (value) => typeof value === 'string' && value === value.trim() && value.length > 0 && value.length <= 100 && !/[\p{Cc}]/u.test(value);
 export class AdminRequestError extends Error {}
 export class AdminAccessError extends Error {}
 export class AdminConflictError extends Error {}
@@ -21,16 +22,48 @@ export function applyAuthenticatedOperation(db, identity, operation, input) {
     if (!only(input, ['staffId']) || !id(input.staffId)) throw new AdminRequestError('Invalid request');
   } else if (operation === 'close-history') {
     if (!only(input, ['recordId', 'endsAt']) || !id(input.recordId) || !validTimestamp(input.endsAt)) throw new AdminRequestError('Invalid request');
+  } else if (operation === 'add-location') {
+    if (!only(input, ['locationId', 'label']) || !id(input.locationId) || !label(input.label)) throw new AdminRequestError('Invalid request');
+  } else if (operation === 'add-shift') {
+    if (!only(input, ['shiftId', 'staffId', 'locationId', 'startsAt', 'endsAt', 'graceMinutes']) || !id(input.shiftId) ||
+        !id(input.staffId) || !id(input.locationId) || !validTimestamp(input.startsAt) || !validTimestamp(input.endsAt) ||
+        input.endsAt <= input.startsAt || !Number.isInteger(input.graceMinutes) || input.graceMinutes < 0 || input.graceMinutes > 180) throw new AdminRequestError('Invalid request');
   } else throw new AdminRequestError('Invalid request');
   db.exec('PRAGMA foreign_keys = ON');
   const version = db.prepare('PRAGMA user_version').get().user_version;
-  if (![3, 4, 5].includes(version) || (operation === 'close-history' && version < 4)) throw new Error('Migration required');
+  if (![3, 4, 5, 6].includes(version) || (operation === 'close-history' && version < 4) ||
+      (['add-location', 'add-shift'].includes(operation) && version < 6)) throw new Error('Migration required');
   db.exec('BEGIN IMMEDIATE');
   try {
     const actor = db.prepare("SELECT business_id, staff_id FROM memberships WHERE issuer = ? AND subject = ? AND role = 'ADMIN' AND active = 1")
       .get(identity.issuer, identity.subject);
     if (!actor || !id(actor.business_id) || !id(actor.staff_id)) throw new AdminAccessError('Not authorized');
     const business = actor.business_id;
+    if (operation === 'add-location' || operation === 'add-shift') {
+      const location = db.prepare('SELECT label FROM schedule_locations WHERE business_id = ? AND id = ?').get(business, input.locationId);
+      if (operation === 'add-location') {
+        if (location) {
+          if (location.label !== input.label) throw new AdminConflictError('Location conflicts');
+          db.exec('COMMIT'); return { replayed: true };
+        }
+        db.prepare('INSERT INTO schedule_locations (business_id,id,label) VALUES (?,?,?)').run(business, input.locationId, input.label);
+      } else {
+        const existing = db.prepare('SELECT staff_id,location_id,starts_at,ends_at,grace_minutes FROM scheduled_shifts WHERE business_id = ? AND id = ?').get(business, input.shiftId);
+        if (existing) {
+          if (existing.staff_id !== input.staffId || existing.location_id !== input.locationId || existing.starts_at !== input.startsAt ||
+              existing.ends_at !== input.endsAt || existing.grace_minutes !== input.graceMinutes) throw new AdminConflictError('Shift conflicts');
+          db.exec('COMMIT'); return { replayed: true };
+        }
+        if (!location || !db.prepare('SELECT 1 FROM memberships WHERE business_id = ? AND staff_id = ? AND active = 1').get(business, input.staffId)) throw new AdminRequestError('Invalid target');
+        if (db.prepare('SELECT 1 FROM scheduled_shifts WHERE business_id = ? AND staff_id = ? AND starts_at < ? AND ends_at > ? LIMIT 1')
+          .get(business, input.staffId, input.endsAt, input.startsAt)) throw new AdminConflictError('Shift conflicts');
+        db.prepare('INSERT INTO scheduled_shifts (business_id,id,staff_id,location_id,starts_at,ends_at,grace_minutes) VALUES (?,?,?,?,?,?,?)')
+          .run(business, input.shiftId, input.staffId, input.locationId, input.startsAt, input.endsAt, input.graceMinutes);
+      }
+      db.prepare('INSERT INTO schedule_create_events (business_id,actor_staff_id,operation,target_id,created_at) VALUES (?,?,?,?,?)')
+        .run(business, actor.staff_id, operation, operation === 'add-location' ? input.locationId : input.shiftId, new Date().toISOString());
+      db.exec('COMMIT'); return { replayed: false };
+    }
     if (operation === 'close-history') {
       const record = db.prepare('SELECT staff_id, starts_at, ends_at FROM history WHERE business_id = ? AND id = ?').get(business, input.recordId);
       if (!record || !id(record.staff_id) || !validTimestamp(record.starts_at) || input.endsAt <= record.starts_at) {
