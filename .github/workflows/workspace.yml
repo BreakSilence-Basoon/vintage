@@ -17,3 +17,4 @@ jobs:
       - run: corepack enable
       - run: corepack pnpm install --frozen-lockfile --ignore-scripts
       - run: corepack pnpm test
+      - run: corepack pnpm --filter @vintage/timetable-policy test

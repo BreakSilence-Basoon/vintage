@@ -1,0 +1,10 @@
+{
+  "name": "@vintage/timetable-policy",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.mjs",
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  }
+}
