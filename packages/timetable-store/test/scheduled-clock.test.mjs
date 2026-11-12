@@ -10,13 +10,62 @@ import { initializeTimetableStore } from '../src/index.mjs';
 import { migrateWithBackup } from '../src/operations.mjs';
 import { applyAuthenticatedOperation } from '../src/admin.mjs';
 import { registerKiosk, issueKioskChallenge } from '../src/kiosk.mjs';
-import { confirmScheduledAttendance } from '../src/scheduled-clock.mjs';
+import { confirmScheduledAttendance, getScheduledAttendanceReceipt } from '../src/scheduled-clock.mjs';
 import { prepareRestoredDatabase } from '../src/prepare-restore.mjs';
 import { unlockRecoveredAdmin } from '../src/recover-admin.mjs';
 
 const issuer = 'https://identity.example.invalid';
 const identity = (subject) => ({ issuer, subject, issuedAt: Math.floor(Date.now() / 1000) });
 const policy = { earlyWindowMs: 3600000, lateWindowMs: 3600000 };
+
+test('lost replies can be recovered by the same authorized staff without creating duplicate attendance', async (t) => {
+  const prefix = join(tmpdir(), 'vintage-receipt-'), temp = mkdtempSync(prefix);
+  let db;
+  try {
+    t.mock.timers.enable({ apis: ['Date'] });
+    t.mock.timers.setTime(Date.parse('2026-01-01T09:00:00.000Z'));
+    const fixture = await setup(join(temp, 'fixture.sqlite'), temp, '2026-01-01T09:00:00.000Z', '2026-01-01T17:00:00.000Z');
+    db = fixture.db;
+    const user = identity('example-user'), input = { shiftId: 'shift-a', expectedRevision: 1 };
+    const challenge = issueKioskChallenge(db, fixture.first, 'clock-in', 60);
+    const receipt = (who = user, value = challenge, action = 'clock-in', requested = input) => getScheduledAttendanceReceipt(db, who, value, action, requested);
+    assert.equal(receipt(), null);
+    const observer = new DatabaseSync(join(temp, 'fixture.sqlite'));
+    const execute = db.exec.bind(db);
+    db.exec = (sql) => {
+      if (sql === 'COMMIT') assert.equal(getScheduledAttendanceReceipt(observer, user, challenge, 'clock-in', input), null);
+      return execute(sql);
+    };
+    let original;
+    try { original = confirmScheduledAttendance(db, user, challenge, 'clock-in', input, policy); } // Simulated lost reply.
+    finally { db.exec = execute; observer.close(); }
+    assert.throws(() => confirmScheduledAttendance(db, user, challenge, 'clock-in', input, policy));
+    assert.deepEqual(receipt(), original);
+    assert.equal(receipt(identity('example-other')), null);
+    assert.equal(receipt(identity('example-foreign')), null);
+    assert.equal(receipt(user, challenge, 'clock-out'), null);
+    assert.equal(receipt(user, challenge, 'clock-in', { ...input, expectedRevision: 2 }), null);
+    db.prepare('UPDATE memberships SET active=0 WHERE subject=?').run('example-user');
+    assert.equal(receipt(), null);
+    db.prepare('UPDATE memberships SET active=1, token_valid_after=? WHERE subject=?').run(user.issuedAt + 1, 'example-user');
+    assert.equal(receipt(), null);
+    t.mock.timers.tick(3600000);
+    const freshUser = identity('example-user');
+    assert.deepEqual(receipt(freshUser), original); // Receipt survives challenge expiry.
+    const checkout = issueKioskChallenge(db, fixture.first, 'clock-out', 60);
+    const closed = confirmScheduledAttendance(db, freshUser, checkout, 'clock-out', input, policy); // Simulated lost reply.
+    assert.deepEqual(receipt(freshUser, checkout, 'clock-out'), closed);
+    assert.deepEqual(receipt(freshUser), original); // A later checkout does not change the earlier receipt.
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM history').get().n, 1);
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM scheduled_attendance_events').get().n, 2);
+    db.exec("INSERT INTO restore_preparation_events VALUES (1,'2026-01-01T10:00:00.000Z',0,0,0,'local-operator'); INSERT INTO recovery_guard VALUES (1,1,'pending')");
+    assert.equal(receipt(freshUser), null);
+  } finally {
+    if (db?.isOpen) db.close();
+    if (!resolve(temp).startsWith(resolve(prefix))) throw new Error('Unexpected temporary path');
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
 
 async function setup(path, dir, startsAt, endsAt) {
   let db = new DatabaseSync(path);
@@ -160,6 +209,22 @@ test('concurrent confirmed clock-ins cannot create two records', async (t) => {
     if (!zeroOutcomes.includes('ok')) confirmScheduledAttendance(db, identity('example-other'), zeroChallenges[0], 'clock-in', { shiftId: 'shift-b', expectedRevision: 1 }, policy);
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM history').get().n, 2);
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM scheduled_attendance_events').get().n, 2);
+    applyAuthenticatedOperation(db, fixture.admin, 'add-viewer', { staffId: 'staff-c', subject: 'example-third' });
+    applyAuthenticatedOperation(db, fixture.admin, 'add-shift', { shiftId: 'shift-c', staffId: 'staff-c', locationId: 'location-a',
+      startsAt: new Date(now - 60000).toISOString(), endsAt: new Date(now + 3600000).toISOString(), graceMinutes: 0 });
+    const repeated = issueKioskChallenge(db, fixture.first, 'clock-in', 60);
+    db.close();
+    const repeatedOutcomes = await Promise.all([run(repeated, 'example-third', 'shift-c', false), run(repeated, 'example-third', 'shift-c', false)]);
+    assert.ok(repeatedOutcomes.filter((value) => value === 'ok').length <= 1);
+    db = new DatabaseSync(path);
+    const third = identity('example-third'), thirdInput = { shiftId: 'shift-c', expectedRevision: 1 };
+    if (!repeatedOutcomes.includes('ok')) confirmScheduledAttendance(db, third, repeated, 'clock-in', thirdInput, policy);
+    const recovered = getScheduledAttendanceReceipt(db, third, repeated, 'clock-in', thirdInput);
+    assert.ok(recovered?.recordId);
+    assert.throws(() => confirmScheduledAttendance(db, third, repeated, 'clock-in', thirdInput, policy));
+    assert.deepEqual(getScheduledAttendanceReceipt(db, third, repeated, 'clock-in', thirdInput), recovered);
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM history').get().n, 3);
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM scheduled_attendance_events').get().n, 3);
   } finally {
     if (db?.isOpen) db.close();
     if (!resolve(temp).startsWith(resolve(prefix))) throw new Error('Unexpected temporary path');
@@ -196,6 +261,47 @@ test('default zero-timeout lock failure leaves challenge and attendance unchange
   } finally {
     if (probe?.isOpen) probe.close();
     if (holder?.isOpen) holder.close();
+    if (db?.isOpen) db.close();
+    if (!resolve(temp).startsWith(resolve(prefix))) throw new Error('Unexpected temporary path');
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test('a reader blocking COMMIT causes an atomic rollback before a later attempt', async () => {
+  const prefix = join(tmpdir(), 'vintage-clock-commit-lock-');
+  const temp = mkdtempSync(prefix);
+  let db, reader;
+  try {
+    const path = join(temp, 'fixture.sqlite'), now = Date.now();
+    const fixture = await setup(path, temp, new Date(now - 60000).toISOString(), new Date(now + 3600000).toISOString());
+    db = fixture.db;
+    assert.equal(db.prepare('PRAGMA journal_mode').get().journal_mode, 'delete');
+    assert.equal(db.prepare('PRAGMA busy_timeout').get().timeout, 0);
+    const challenge = issueKioskChallenge(db, fixture.first, 'clock-in', 60);
+    const digest = createHash('sha256').update(challenge).digest('hex');
+    reader = new DatabaseSync(path);
+    reader.exec('BEGIN');
+    reader.prepare('SELECT COUNT(*) AS n FROM history').get();
+    let commitErrorCode = null;
+    const originalExec = db.exec.bind(db);
+    db.exec = (statement) => {
+      try { return originalExec(statement); }
+      catch (error) { if (statement === 'COMMIT') commitErrorCode = error.errcode; throw error; }
+    };
+    try {
+      assert.throws(() => confirmScheduledAttendance(db, identity('example-user'), challenge, 'clock-in',
+        { shiftId: 'shift-a', expectedRevision: 1 }, policy), (error) => error.message === 'Scheduled attendance failed');
+      assert.equal(commitErrorCode, 5);
+      assert.equal(reader.prepare('SELECT COUNT(*) AS n FROM history').get().n, 0);
+      assert.equal(reader.prepare('SELECT used_at FROM kiosk_challenges WHERE digest=?').get(digest).used_at, null);
+    } finally { reader.exec('ROLLBACK'); }
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM history').get().n, 0);
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM scheduled_attendance_events').get().n, 0);
+    assert.equal(db.prepare('SELECT used_at FROM kiosk_challenges WHERE digest=?').get(digest).used_at, null);
+    assert.ok(confirmScheduledAttendance(db, identity('example-user'), challenge, 'clock-in', { shiftId: 'shift-a', expectedRevision: 1 }, policy).recordId);
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM history').get().n, 1);
+  } finally {
+    if (reader?.isOpen) reader.close();
     if (db?.isOpen) db.close();
     if (!resolve(temp).startsWith(resolve(prefix))) throw new Error('Unexpected temporary path');
     rmSync(temp, { recursive: true, force: true });
