@@ -18,6 +18,7 @@ jobs:
       - run: corepack pnpm install --frozen-lockfile --ignore-scripts
       - run: corepack pnpm test
       - run: corepack pnpm --filter @vintage/timetable-policy test
+      - run: corepack pnpm --filter @vintage/ledger-facts test
       - run: corepack pnpm --filter @vintage/access-token test
       - run: corepack pnpm --filter @vintage/oidc-login test
       - run: corepack pnpm --filter @vintage/timetable-read-api test
