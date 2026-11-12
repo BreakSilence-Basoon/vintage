@@ -3,6 +3,6 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "scripts": { "start": "node src/main.mjs", "init-db": "node src/init-db.mjs", "change-grant": "node src/manage-grant.mjs change", "test": "node --test test/*.test.mjs" },
+  "scripts": { "start": "node src/main.mjs", "init-db": "node src/init-db.mjs", "change-grant": "node src/manage-grant.mjs change", "recovery": "node src/manage-recovery.mjs", "test": "node --test test/*.test.mjs" },
   "dependencies": { "@vintage/ledger-store": "workspace:*", "jose": "6.2.17" }
 }
