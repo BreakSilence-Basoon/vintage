@@ -76,3 +76,31 @@ test('the actual Timetable API installs and passes its HTTP tests in a clean sel
     rmSync(temp, { recursive: true, force: true });
   }
 });
+
+test('the experimental Ledger API installs and passes its local flow in a clean selected workspace', () => {
+  const source = fileURLToPath(new URL('../', import.meta.url));
+  const prefix = join(tmpdir(), 'vintage-ledger-selection-'), temp = mkdtempSync(prefix);
+  try {
+    for (const name of ['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml']) cpSync(join(source, name), join(temp, name));
+    const app = join(temp, 'apps/ledger-api'); mkdirSync(app, { recursive: true });
+    for (const name of ['package.json', 'src', 'test']) cpSync(join(source, 'apps/ledger-api', name), join(app, name), { recursive: true });
+    for (const entry of readdirSync(join(source, 'packages'), { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const destination = join(temp, 'packages', entry.name); mkdirSync(destination, { recursive: true });
+      for (const name of ['package.json', 'src']) cpSync(join(source, 'packages', entry.name, name), join(destination, name), { recursive: true });
+    }
+    const install = spawnSync(process.execPath, [pnpmCli, 'install', '--offline', '--frozen-lockfile', '--ignore-scripts', '--filter', '@vintage/ledger-api...'], {
+      cwd: temp, encoding: 'utf8', timeout: 120000,
+    });
+    assert.equal(install.status, 0, install.stdout + install.stderr);
+    assert.ok(existsSync(join(temp, 'apps/ledger-api/node_modules/@vintage/ledger-store')));
+    assert.equal(existsSync(join(temp, 'apps/timetable-api')), false);
+    const env = { ...process.env }; delete env.NODE_TEST_CONTEXT;
+    const result = spawnSync(process.execPath, [pnpmCli, '--filter', '@vintage/ledger-api', 'test'], { cwd: temp, env, encoding: 'utf8', timeout: 120000 });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.match(result.stdout, /loopback flow requires a signed token/);
+  } finally {
+    if (!resolve(temp).startsWith(resolve(prefix))) throw new Error('Unexpected temporary path');
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
