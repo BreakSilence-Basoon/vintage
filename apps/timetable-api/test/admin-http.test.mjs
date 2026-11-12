@@ -103,6 +103,16 @@ test('opt-in write HTTP enforces scope, current admin role, tenant and audit', a
       assert.equal(writer.prepare('SELECT COUNT(*) AS n FROM schedule_locations WHERE id=?').get('locked-location').n, 0);
     } finally { writer.exec('ROLLBACK'); }
     assert.equal((await post('/v1/admin/locations', admin, lockedLocation)).status, 200);
+    const commitLockedLocation = { locationId: 'commit-locked-location', label: 'Example commit lock' };
+    writer.exec('BEGIN');
+    writer.prepare('SELECT COUNT(*) AS n FROM schedule_locations').get();
+    try {
+      const blockedCommit = await post('/v1/admin/locations', admin, commitLockedLocation);
+      assert.equal(blockedCommit.status, 503);
+      assert.deepEqual(await blockedCommit.json(), { error: 'unavailable' });
+    } finally { writer.exec('ROLLBACK'); }
+    assert.equal(writer.prepare('SELECT COUNT(*) AS n FROM schedule_locations WHERE id=?').get('commit-locked-location').n, 0);
+    assert.equal((await post('/v1/admin/locations', admin, commitLockedLocation)).status, 200);
     const staffUrl = `${base}/v1/admin/staff?limit=1`;
     assert.equal((await fetch(staffUrl, { headers: authHeader })).status, 404);
     assert.equal((await fetch(staffUrl, { headers: { authorization: `Bearer ${readOnlyAdmin}` } })).status, 401);

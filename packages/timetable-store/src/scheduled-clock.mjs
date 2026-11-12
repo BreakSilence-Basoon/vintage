@@ -52,3 +52,29 @@ export function confirmScheduledAttendance(db, identity, challenge, purpose, inp
     });
   } catch { throw new Error('Scheduled attendance failed'); }
 }
+
+// A receipt confirms only a committed operation. Null does not prove that another request is not in flight.
+// Callers must authenticate identity before invoking this server-only function and keep challenges secret.
+export function getScheduledAttendanceReceipt(db, identity, challenge, purpose, input) {
+  try {
+    const part = (value) => typeof value === 'string' && value.length > 0 && value.length <= 2048 && value === value.trim();
+    if (!identity || !part(identity.issuer) || !part(identity.subject) || !Number.isSafeInteger(identity.issuedAt) || identity.issuedAt < 0 ||
+        typeof challenge !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(challenge) || !['clock-in', 'clock-out'].includes(purpose) ||
+        !input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some((key) => !['shiftId', 'expectedRevision'].includes(key)) ||
+        !id(input.shiftId) || !revision(input.expectedRevision) || db.prepare('PRAGMA user_version').get().user_version !== 14) throw new Error('Invalid input');
+    const row = db.prepare(`SELECT h.id AS record_id,h.starts_at,h.ends_at,e.created_at
+      FROM memberships m JOIN kiosk_challenges c ON c.business_id=m.business_id AND c.actor_staff_id=m.staff_id
+      JOIN scheduled_attendance_events e ON e.challenge_digest=c.digest AND e.business_id=c.business_id AND e.staff_id=m.staff_id AND e.device_id=c.device_id AND e.purpose=c.purpose
+      JOIN scheduled_attendance a ON a.business_id=e.business_id AND a.shift_id=e.shift_id AND a.staff_id=e.staff_id
+      JOIN history h ON h.business_id=a.business_id AND h.id=a.record_id AND h.staff_id=a.staff_id
+      JOIN scheduled_shifts s ON s.business_id=e.business_id AND s.id=e.shift_id AND s.staff_id=e.staff_id
+      WHERE m.issuer=? AND m.subject=? AND m.active=1 AND m.role IN ('VIEWER','ADMIN') AND m.token_valid_after<=?
+        AND c.digest=? AND c.purpose=? AND c.used_at IS NOT NULL AND e.shift_id=? AND s.revision=?
+        AND ((e.purpose='clock-in' AND a.checkin_device_id=e.device_id AND h.starts_at=e.created_at)
+          OR (e.purpose='clock-out' AND a.checkout_device_id=e.device_id AND h.ends_at=e.created_at))
+        AND NOT EXISTS (SELECT 1 FROM recovery_guard WHERE id=1 AND status='pending')`)
+      .get(identity.issuer, identity.subject, identity.issuedAt, createHash('sha256').update(challenge).digest('hex'), purpose, input.shiftId, input.expectedRevision);
+    if (!row) return null;
+    return { recordId: row.record_id, startsAt: row.starts_at, endsAt: purpose === 'clock-in' ? null : row.created_at };
+  } catch { throw new Error('Scheduled attendance receipt unavailable'); }
+}
