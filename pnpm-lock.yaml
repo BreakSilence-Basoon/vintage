@@ -32,6 +32,16 @@ importers:
         specifier: 6.2.17
         version: 6.2.17
 
+  packages/ledger-access:
+    dependencies:
+      '@vintage/access-token':
+        specifier: workspace:*
+        version: link:../access-token
+    devDependencies:
+      jose:
+        specifier: 6.2.17
+        version: 6.2.17
+
   packages/ledger-facts: {}
 
   packages/ledger-store:

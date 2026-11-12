@@ -1,0 +1,10 @@
+{
+  "name": "@vintage/ledger-access",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.mjs" },
+  "scripts": { "test": "node --test test/*.test.mjs" },
+  "dependencies": { "@vintage/access-token": "workspace:*" },
+  "devDependencies": { "jose": "6.2.17" }
+}
