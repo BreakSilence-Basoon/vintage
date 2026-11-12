@@ -1,5 +1,5 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import { closeSync, constants, fstatSync, fsyncSync, lstatSync, openSync, readFileSync, writeFileSync } from 'node:fs';
+import { closeSync, constants, fstatSync, fsyncSync, lstatSync, openSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 
 const maxBytes = 8 * 1024 * 1024;
@@ -56,6 +56,33 @@ export function createEvidenceVault({ directory, acknowledgeSyntheticOnly } = {}
     },
     read(reference) {
       try { return readVerified(reference); } catch { throw new Error('Evidence operation failed'); }
+    },
+    inspect(references) {
+      try {
+        if (!Array.isArray(references) || references.length > 10000) throw new Error('Invalid references');
+        const ids = new Set();
+        for (const ref of references) {
+          if (!ref || typeof ref !== 'object' || Array.isArray(ref) || Object.keys(ref).length !== 3 ||
+              !['id','sha256','size'].every((key) => Object.hasOwn(ref, key)) || !hex(ref.id) || !hex(ref.sha256) ||
+              !Number.isSafeInteger(ref.size) || ref.size < 1 || ref.size > maxBytes || ids.has(ref.id)) throw new Error('Invalid reference');
+          ids.add(ref.id);
+        }
+        checkRoot();
+        const entries = readdirSync(directory, { withFileTypes: true });
+        if (entries.length > 10000) throw new Error('Too many entries');
+        const names = new Map(entries.map((entry) => [entry.name, entry]));
+        const result = { verified: 0, missing: 0, unreadableOrChanged: 0, unregistered: 0, unexpected: 0 };
+        for (const ref of references) {
+          if (!names.has(ref.id)) result.missing++;
+          else { try { readVerified(ref); result.verified++; } catch { result.unreadableOrChanged++; } }
+        }
+        for (const entry of entries) {
+          if (ids.has(entry.name)) continue;
+          if (hex(entry.name) && entry.isFile()) result.unregistered++; else result.unexpected++;
+        }
+        checkRoot();
+        return result;
+      } catch { throw new Error('Evidence inspection failed'); }
     },
   });
 }
