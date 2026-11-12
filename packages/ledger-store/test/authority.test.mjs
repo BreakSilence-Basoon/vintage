@@ -132,3 +132,22 @@ test('a revoked read grant is rechecked in the read transaction', async () => {
     rmSync(temp, { recursive: true, force: true });
   }
 });
+
+test('a revoked grant is rechecked before listing records', async () => {
+  const prefix = join(tmpdir(), 'vintage-ledger-list-revoke-'), temp = mkdtempSync(prefix), path = join(temp, 'fixture.sqlite');
+  let db, revoker;
+  try {
+    db = new DatabaseSync(path); initializeLedgerStore(db); writeLedgerFact(db, { ...request, actorId: grant.actorId });
+    initializeLedgerAuthority(db, 'example-shop'); setLedgerGrant(db, grant); revoker = new DatabaseSync(path);
+    const store = createLedgerAuthorizedStore(db, config), exec = db.exec.bind(db);
+    let injected = false;
+    db.exec = (sql) => { if (sql === 'BEGIN' && !injected) { injected = true; setLedgerGrant(revoker, { ...grant, active: false }); } return exec(sql); };
+    try { await assert.rejects(store.list(await token(), {})); } finally { db.exec = exec; }
+    assert.equal(injected, true);
+  } finally {
+    if (revoker?.isOpen) revoker.close();
+    if (db?.isOpen) db.close();
+    if (!resolve(temp).startsWith(resolve(prefix))) throw new Error('Unexpected temporary path');
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
