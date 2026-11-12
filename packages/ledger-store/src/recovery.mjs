@@ -2,6 +2,7 @@ import { linkSync, lstatSync, mkdtempSync, realpathSync, rmdirSync, statSync, un
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { copyLedgerDatabase, verifyStructure } from './backup.mjs';
+import { authorityInstalled } from './authority.mjs';
 
 const validId = (value) => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 const validReason = (value) => typeof value === 'string' && value.length >= 1 && value.length <= 500 && value === value.trim() && !/[\x00-\x1f\x7f]/.test(value);
@@ -32,6 +33,10 @@ export async function prepareLedgerRecovery(source, destination) {
       const changed = db.prepare("UPDATE ledger_recovery_guard SET status='pending',generation=? WHERE id=1 AND status='unlocked' AND generation=?").run(generation, guard.generation);
       if (changed.changes !== 1) throw new Error('Recovery conflict');
     } else throw new Error('Invalid version');
+    if (authorityInstalled(db)) {
+      if (!db.prepare('SELECT business_id FROM ledger_authority_config WHERE id=1').get()) throw new Error('Invalid authority');
+      db.prepare('UPDATE ledger_authority_grants SET active=0,token_valid_after=MAX(token_valid_after,?)').run(Math.floor(Date.now() / 1000) + 1);
+    }
     db.prepare("INSERT INTO ledger_recovery_events VALUES (?,'prepare',NULL,NULL,?)").run(generation, new Date().toISOString());
     db.exec('COMMIT'); begun = false;
     db.close(); db = undefined;

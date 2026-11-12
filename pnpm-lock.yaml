@@ -46,9 +46,16 @@ importers:
 
   packages/ledger-store:
     dependencies:
+      '@vintage/ledger-access':
+        specifier: workspace:*
+        version: link:../ledger-access
       '@vintage/ledger-facts':
         specifier: workspace:*
         version: link:../ledger-facts
+    devDependencies:
+      jose:
+        specifier: 6.2.17
+        version: 6.2.17
 
   packages/oidc-login:
     dependencies:

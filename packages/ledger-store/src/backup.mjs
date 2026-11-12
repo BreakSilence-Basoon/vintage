@@ -1,6 +1,7 @@
 import { closeSync, linkSync, lstatSync, mkdtempSync, openSync, rmdirSync, unlinkSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { backup, DatabaseSync } from 'node:sqlite';
+import { authorityInstalled } from './authority.mjs';
 
 export function verifyStructure(db) {
   const integrity = db.prepare('PRAGMA integrity_check').all();
@@ -12,6 +13,14 @@ export function verifyStructure(db) {
   }
   db.prepare('SELECT id,revision,fact_json FROM ledger_facts LIMIT 0');
   db.prepare('SELECT operation_id,actor_id,fingerprint,fact_id,revision,before_json,after_json,recorded_at FROM ledger_operations LIMIT 0');
+  if (authorityInstalled(db)) {
+    for (const name of ['ledger_authority_config', 'ledger_authority_grants', 'ledger_authority_events']) {
+      if (db.prepare('SELECT type FROM sqlite_schema WHERE name=?').get(name)?.type !== 'table') throw new Error('Invalid authority schema');
+    }
+    if (!db.prepare('SELECT business_id FROM ledger_authority_config WHERE id=1').get()) throw new Error('Invalid authority');
+    db.prepare('SELECT issuer,subject,actor_id,active,can_read,can_write,token_valid_after FROM ledger_authority_grants LIMIT 0');
+    db.prepare('SELECT operator_id,reason,before_json,after_json,recorded_at FROM ledger_authority_events LIMIT 0');
+  }
   if (version === 2) {
     for (const name of ['ledger_recovery_guard', 'ledger_recovery_events']) {
       if (db.prepare('SELECT type FROM sqlite_schema WHERE name=?').get(name)?.type !== 'table') throw new Error('Invalid schema');

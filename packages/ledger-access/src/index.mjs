@@ -22,7 +22,7 @@ export function createLedgerAccessCheck({ issuer, audience, clientIds, keyResolv
           member.active !== true || member.read !== true || (action === 'write' && member.write !== true) ||
           !Number.isSafeInteger(member.tokenValidAfter) || member.tokenValidAfter < 0 || identity.issuedAt < member.tokenValidAfter ||
           Date.now() >= identity.expiresAt) return null;
-      return Object.freeze({ issuer: identity.issuer, subject: identity.subject, actorId: member.actorId, businessId, expiresAt: identity.expiresAt });
+      return Object.freeze({ issuer: identity.issuer, subject: identity.subject, actorId: member.actorId, businessId, issuedAt: identity.issuedAt, expiresAt: identity.expiresAt });
     } catch { return null; }
   };
 }

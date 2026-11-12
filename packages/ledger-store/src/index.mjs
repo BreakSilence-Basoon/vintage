@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 import { validateLedgerFact } from '@vintage/ledger-facts';
+import { createLedgerAccessCheck } from '@vintage/ledger-access';
+import { authorityInstalled, lookupLedgerGrant } from './authority.mjs';
 
 const validId = (value) => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 const version = (db) => db.prepare('PRAGMA user_version').get().user_version;
@@ -34,7 +36,7 @@ export function initializeLedgerStore(db) {
 }
 
 // Trusted local/server code only. Validate actor and current authorization before every call, including retries.
-export function writeLedgerFact(db, input) {
+function writeLedgerFactInternal(db, input, authorize) {
   let begun = false;
   try {
     if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).length !== 4 ||
@@ -46,6 +48,8 @@ export function writeLedgerFact(db, input) {
     db.exec('PRAGMA foreign_keys = ON');
     db.exec('BEGIN IMMEDIATE'); begun = true;
     requireSupported(db, true);
+    if (authorize) authorize();
+    else if (authorityInstalled(db)) throw new Error('Authenticated access required');
     const previousOperation = db.prepare('SELECT fingerprint,fact_id,revision FROM ledger_operations WHERE operation_id=?').get(input.operationId);
     if (previousOperation) {
       if (previousOperation.fingerprint !== fingerprint) throw new Error('Operation conflict');
@@ -70,12 +74,50 @@ export function writeLedgerFact(db, input) {
   }
 }
 
+export function writeLedgerFact(db, input) { return writeLedgerFactInternal(db, input, null); }
+
 // Do not expose this unauthenticated; the caller must first authorize access to the record.
 export function readLedgerFact(db, id) {
   try {
     if (!validId(id)) throw new Error('Invalid input');
     requireSupported(db, false);
+    if (authorityInstalled(db)) throw new Error('Authenticated access required');
     const row = db.prepare('SELECT revision,fact_json FROM ledger_facts WHERE id=?').get(id);
     return row ? { revision: row.revision, fact: validateLedgerFact(JSON.parse(row.fact_json)) } : null;
   } catch { throw new Error('Ledger read failed'); }
+}
+
+// Server configuration and key resolver are trusted. The database is the grant source.
+export function createLedgerAuthorizedStore(db, options) {
+  const check = createLedgerAccessCheck({ ...options, lookupMembership: async (identity) => lookupLedgerGrant(db, identity) });
+  function recheck(identity, action) {
+    const member = lookupLedgerGrant(db, identity);
+    if (!member || member.actorId !== identity.actorId || member.businessId !== identity.businessId || !member.active || !member.read ||
+        (action === 'write' && !member.write) || identity.issuedAt < member.tokenValidAfter || Date.now() >= identity.expiresAt) throw new Error('Access denied');
+  }
+  return Object.freeze({
+    async write(authorization, input) {
+      const identity = await check(authorization, 'write');
+      if (!identity || !input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).length !== 3 ||
+          !['operationId', 'expectedRevision', 'fact'].every((key) => Object.hasOwn(input, key))) throw new Error('Ledger access failed');
+      return writeLedgerFactInternal(db, { ...input, actorId: identity.actorId }, () => recheck(identity, 'write'));
+    },
+    async read(authorization, id) {
+      const identity = await check(authorization, 'read');
+      if (!identity || !validId(id)) throw new Error('Ledger access failed');
+      let begun = false;
+      try {
+        db.exec('BEGIN'); begun = true;
+        requireSupported(db, true);
+        recheck(identity, 'read');
+        const row = db.prepare('SELECT revision,fact_json FROM ledger_facts WHERE id=?').get(id);
+        const result = row ? { revision: row.revision, fact: validateLedgerFact(JSON.parse(row.fact_json)) } : null;
+        db.exec('COMMIT'); begun = false;
+        return result;
+      } catch {
+        if (begun) { try { db.exec('ROLLBACK'); } catch { if (db.isTransaction) { try { db.close(); } catch {} } } }
+        throw new Error('Ledger access failed');
+      }
+    },
+  });
 }
