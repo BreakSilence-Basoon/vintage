@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { once } from 'node:events';
@@ -53,6 +53,29 @@ test('initialization command accepts UTF-8 input without printing identifiers', 
     });
     assert.notEqual(retry.status, 0);
   } finally {
+    if (!resolve(temp).startsWith(resolve(prefix))) throw new Error('Unexpected temporary path');
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test('all-migration command creates versioned backups without printing identities', () => {
+  const prefix = join(tmpdir(), 'vintage-migrate-all-cli-'), temp = mkdtempSync(prefix);
+  let db;
+  try {
+    const path = join(temp, 'fixture.sqlite'), backups = join(temp, 'backups');
+    mkdirSync(backups);
+    initializeNewDatabase(path, { issuer: 'https://identity.example.invalid', subject: 'example-person', businessId: 'shop-a', staffId: 'staff-a' });
+    const result = spawnSync(process.execPath, [fileURLToPath(new URL('../src/manage-db.mjs', import.meta.url)), 'migrate-all'], {
+      encoding: 'utf8', env: { ...process.env, VINTAGE_DATABASE_FILE: path, VINTAGE_BACKUP_DIRECTORY: backups },
+    });
+    assert.equal(result.status, 0);
+    assert.doesNotMatch(result.stdout + result.stderr, /example-person|shop-a|staff-a/);
+    db = new DatabaseSync(path, { readOnly: true });
+    assert.equal(db.prepare('PRAGMA user_version').get().user_version, 14);
+    assert.equal(existsSync(join(backups, 'timetable-before-v1.sqlite')), true);
+    assert.equal(existsSync(join(backups, 'timetable-before-v13.sqlite')), true);
+  } finally {
+    if (db?.isOpen) db.close();
     if (!resolve(temp).startsWith(resolve(prefix))) throw new Error('Unexpected temporary path');
     rmSync(temp, { recursive: true, force: true });
   }

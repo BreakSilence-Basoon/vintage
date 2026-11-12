@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node src/main.mjs", "init-db": "node src/init-db.mjs",
     "backup-db": "node src/copy-db.mjs backup", "restore-db": "node src/copy-db.mjs restore", "prepare-restored-db": "node src/prepare-restore.mjs", "recover-admin": "node src/recover-admin.mjs",
-    "migrate-db": "node src/manage-db.mjs migrate", "add-viewer": "node src/manage-db.mjs add-viewer",
+    "migrate-db": "node src/manage-db.mjs migrate", "migrate-all-db": "node src/manage-db.mjs migrate-all", "add-viewer": "node src/manage-db.mjs add-viewer",
     "add-history": "node src/manage-db.mjs add-history", "deactivate-viewer": "node src/manage-db.mjs deactivate-viewer",
     "test": "node --test test/*.test.mjs"
   },
