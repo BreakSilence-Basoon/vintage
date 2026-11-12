@@ -19,6 +19,7 @@ jobs:
       - run: corepack pnpm test
       - run: corepack pnpm --filter @vintage/timetable-policy test
       - run: corepack pnpm --filter @vintage/ledger-facts test
+      - run: corepack pnpm --filter @vintage/ledger-evidence-vault test
       - run: corepack pnpm --filter @vintage/ledger-access test
       - run: corepack pnpm --filter @vintage/ledger-store test
       - run: corepack pnpm --filter @vintage/ledger-api test
