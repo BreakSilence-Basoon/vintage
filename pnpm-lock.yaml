@@ -8,6 +8,15 @@ importers:
 
   .: {}
 
+  apps/ledger-api:
+    dependencies:
+      '@vintage/ledger-store':
+        specifier: workspace:*
+        version: link:../../packages/ledger-store
+      jose:
+        specifier: 6.2.17
+        version: 6.2.17
+
   apps/timetable-api:
     dependencies:
       '@vintage/access-token':

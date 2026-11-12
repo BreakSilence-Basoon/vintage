@@ -1,0 +1,8 @@
+{
+  "name": "@vintage/ledger-api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": { "start": "node src/main.mjs", "init-db": "node src/init-db.mjs", "test": "node --test test/*.test.mjs" },
+  "dependencies": { "@vintage/ledger-store": "workspace:*", "jose": "6.2.17" }
+}

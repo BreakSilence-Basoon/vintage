@@ -21,6 +21,7 @@ jobs:
       - run: corepack pnpm --filter @vintage/ledger-facts test
       - run: corepack pnpm --filter @vintage/ledger-access test
       - run: corepack pnpm --filter @vintage/ledger-store test
+      - run: corepack pnpm --filter @vintage/ledger-api test
       - run: corepack pnpm --filter @vintage/access-token test
       - run: corepack pnpm --filter @vintage/oidc-login test
       - run: corepack pnpm --filter @vintage/timetable-read-api test
