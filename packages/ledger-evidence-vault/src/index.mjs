@@ -5,17 +5,32 @@ import { isAbsolute, join } from 'node:path';
 const maxBytes = 8 * 1024 * 1024;
 const hex = (value) => typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
 const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
+const vaults = new WeakMap();
+
+// Identity comparison is advisory and depends on filesystem-provided device/inode values.
+export function compareVaultStorage(left, right, fileId = null) {
+  try {
+    const a = vaults.get(left), b = vaults.get(right);
+    if (!a || !b || (fileId !== null && !hex(fileId))) return 'unknown';
+    a.checkRoot(); b.checkRoot();
+    const first = lstatSync(fileId === null ? a.directory : join(a.directory, fileId), { bigint: true });
+    const second = lstatSync(fileId === null ? b.directory : join(b.directory, fileId), { bigint: true });
+    if (fileId === null ? !first.isDirectory() || !second.isDirectory() : !first.isFile() || !second.isFile()) return 'unknown';
+    if (!first.ino || !second.ino) return 'unknown';
+    return first.dev === second.dev && first.ino === second.ino ? 'same' : 'different';
+  } catch { return 'unknown'; }
+}
 
 // Synthetic-only trusted local experiment. It does not authenticate users or establish filesystem privacy.
 export function createEvidenceVault({ directory, acknowledgeSyntheticOnly } = {}) {
   let root;
   try {
     if (acknowledgeSyntheticOnly !== true || !isAbsolute(directory ?? '')) throw new Error('Invalid configuration');
-    root = lstatSync(directory);
+    root = lstatSync(directory, { bigint: true });
     if (!root.isDirectory()) throw new Error('Invalid directory');
   } catch { throw new Error('Invalid evidence vault'); }
   function checkRoot() {
-    const current = lstatSync(directory);
+    const current = lstatSync(directory, { bigint: true });
     if (!current.isDirectory() || current.dev !== root.dev || current.ino !== root.ino) throw new Error('Invalid vault');
   }
   function readVerified(reference) {
@@ -24,21 +39,21 @@ export function createEvidenceVault({ directory, acknowledgeSyntheticOnly } = {}
         !Number.isSafeInteger(reference.size) || reference.size < 1 || reference.size > maxBytes) throw new Error('Invalid reference');
     checkRoot();
     const path = join(directory, reference.id);
-    const before = lstatSync(path);
-    if (!before.isFile() || before.size !== reference.size) throw new Error('Invalid file');
+    const before = lstatSync(path, { bigint: true });
+    if (!before.isFile() || before.size !== BigInt(reference.size)) throw new Error('Invalid file');
     let fd;
     try {
       fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
-      const opened = fstatSync(fd);
-      if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino || opened.size !== reference.size) throw new Error('Changed file');
+      const opened = fstatSync(fd, { bigint: true });
+      if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino || opened.size !== BigInt(reference.size)) throw new Error('Changed file');
       const bytes = readFileSync(fd);
-      const after = fstatSync(fd), entry = lstatSync(path);
-      if (!entry.isFile() || entry.dev !== opened.dev || entry.ino !== opened.ino || after.size !== reference.size || bytes.length !== reference.size ||
+      const after = fstatSync(fd, { bigint: true }), entry = lstatSync(path, { bigint: true });
+      if (!entry.isFile() || entry.dev !== opened.dev || entry.ino !== opened.ino || after.size !== BigInt(reference.size) || bytes.length !== reference.size ||
           !timingSafeEqual(Buffer.from(digest(bytes), 'hex'), Buffer.from(reference.sha256, 'hex'))) throw new Error('Changed file');
       return bytes;
     } finally { if (fd !== undefined) closeSync(fd); }
   }
-  return Object.freeze({
+  const vault = Object.freeze({
     put(input) {
       try {
         if (!(input instanceof Uint8Array) || input.byteLength < 1 || input.byteLength > maxBytes) throw new Error('Invalid input');
@@ -85,4 +100,6 @@ export function createEvidenceVault({ directory, acknowledgeSyntheticOnly } = {}
       } catch { throw new Error('Evidence inspection failed'); }
     },
   });
+  vaults.set(vault, { directory, checkRoot });
+  return vault;
 }

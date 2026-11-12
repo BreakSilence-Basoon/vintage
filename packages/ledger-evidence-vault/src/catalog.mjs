@@ -1,3 +1,7 @@
+import { lstatSync, realpathSync } from 'node:fs';
+import { isAbsolute } from 'node:path';
+import { compareVaultStorage } from './index.mjs';
+
 const id = (value) => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 const hex = (value) => typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
 const validRef = (ref) => ref && typeof ref === 'object' && !Array.isArray(ref) && Object.keys(ref).length === 3 &&
@@ -51,5 +55,61 @@ export function inspectEvidenceCatalog(db, vault) {
   } catch {
     if (begun) { try { db.exec('ROLLBACK'); } catch { if (db.isTransaction) { try { db.close(); } catch {} } } }
     throw new Error('Evidence catalog inspection failed');
+  }
+}
+function catalogFile(db) {
+  const main = db.prepare('PRAGMA database_list').all().find((row) => row.name === 'main');
+  if (!main || !isAbsolute(main.file ?? '')) throw new Error('A file-backed catalog is required');
+  const stat = lstatSync(main.file, { bigint: true });
+  if (!stat.isFile() || !stat.ino) throw new Error('Unknown catalog identity');
+  return { path: realpathSync(main.file), dev: stat.dev, ino: stat.ino };
+}
+function catalogRows(db) {
+  if (db.prepare('PRAGMA user_version').get().user_version !== 1) throw new Error('Invalid catalog');
+  const rows = db.prepare('SELECT operation_id,file_id AS id,sha256,size FROM evidence_entries LIMIT 10001').all();
+  if (rows.length > 10000) throw new Error('Too many records');
+  const operations = new Set(), files = new Set();
+  for (const row of rows) {
+    if (!id(row.operation_id) || !validRef({ id: row.id, sha256: row.sha256, size: row.size }) || operations.has(row.operation_id) || files.has(row.id)) throw new Error('Invalid record');
+    operations.add(row.operation_id); files.add(row.id);
+  }
+  return rows;
+}
+
+// Read-only, offline advisory check; it neither creates a backup nor proves independent storage.
+export function compareEvidenceBackups(sourceDb, sourceVault, backupDb, backupVault) {
+  let sourceBegun = false, backupBegun = false;
+  try {
+    if (!sourceDb || !backupDb || sourceDb === backupDb || sourceDb.isTransaction || backupDb.isTransaction ||
+        compareVaultStorage(sourceVault, backupVault) !== 'different') throw new Error('Distinct inputs required');
+    const sourceFile = catalogFile(sourceDb), backupFile = catalogFile(backupDb);
+    if (sourceFile.path === backupFile.path || (sourceFile.dev === backupFile.dev && sourceFile.ino === backupFile.ino)) throw new Error('Same catalog');
+    sourceDb.exec('BEGIN'); sourceBegun = true;
+    backupDb.exec('BEGIN'); backupBegun = true;
+    const sourceRows = catalogRows(sourceDb), backupRows = catalogRows(backupDb);
+    const refs = (rows) => rows.map((row) => ({ id: row.id, sha256: row.sha256, size: row.size }));
+    const source = sourceVault.inspect(refs(sourceRows)), backup = backupVault.inspect(refs(backupRows));
+    const sourceMap = new Map(sourceRows.map((row) => [row.operation_id, row]));
+    const backupMap = new Map(backupRows.map((row) => [row.operation_id, row]));
+    const catalog = { onlySource: 0, onlyBackup: 0, changed: 0, equal: 0 };
+    const storage = { sameFileIdentity: 0, differentFileIdentity: 0, unknownIdentity: 0 };
+    for (const [operation, row] of sourceMap) {
+      const other = backupMap.get(operation);
+      if (!other) { catalog.onlySource++; continue; }
+      if (row.id !== other.id || row.sha256 !== other.sha256 || row.size !== other.size) { catalog.changed++; continue; }
+      catalog.equal++;
+      const identity = compareVaultStorage(sourceVault, backupVault, row.id);
+      if (identity === 'same') storage.sameFileIdentity++;
+      else if (identity === 'different') storage.differentFileIdentity++;
+      else storage.unknownIdentity++;
+    }
+    for (const operation of backupMap.keys()) if (!sourceMap.has(operation)) catalog.onlyBackup++;
+    sourceDb.exec('COMMIT'); sourceBegun = false;
+    backupDb.exec('COMMIT'); backupBegun = false;
+    return { source, backup, catalog, storage };
+  } catch { throw new Error('Evidence backup comparison failed'); }
+  finally {
+    if (backupBegun && backupDb?.isTransaction) { try { backupDb.exec('ROLLBACK'); } catch { try { backupDb.close(); } catch {} } }
+    if (sourceBegun && sourceDb?.isTransaction) { try { sourceDb.exec('ROLLBACK'); } catch { try { sourceDb.close(); } catch {} } }
   }
 }
