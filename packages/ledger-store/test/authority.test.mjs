@@ -2,11 +2,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { generateKeyPair, SignJWT } from 'jose';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { initializeLedgerStore, writeLedgerFact, readLedgerFact, createLedgerAuthorizedStore } from '../src/index.mjs';
-import { initializeLedgerAuthority, setLedgerGrant } from '../src/authority.mjs';
+import { initializeLedgerAuthority, setLedgerGrant, setLedgerGrantWithBackup } from '../src/authority.mjs';
 import { prepareLedgerRecovery, unlockLedgerRecovery } from '../src/recovery.mjs';
 
 const issuer = 'https://identity.example.invalid', audience = 'https://api.example.invalid';
@@ -16,6 +16,47 @@ const config = { issuer, audience, clientIds: ['example-client'], businessId: 'e
 const grant = { issuer, subject: 'example-user', actorId: 'example-actor', active: true, read: true, write: true, tokenValidAfter: 0, operatorId: 'example-operator', reason: 'Example review' };
 const fact = { id: 'example-a', type: 'invoice-issued', date: '2026-01-01', currency: 'XXX', amountMinor: '100' };
 const request = { operationId: 'operation-a', expectedRevision: 0, fact };
+
+test('local grant changes require a verified pre-change backup and hold the writer lock', async () => {
+  const prefix = join(tmpdir(), 'vintage-grant-backup-'), temp = mkdtempSync(prefix), path = join(temp, 'ledger.sqlite');
+  let db, copy;
+  try {
+    db = new DatabaseSync(path); initializeLedgerStore(db); initializeLedgerAuthority(db, 'example-shop'); setLedgerGrant(db, grant);
+    const destination = join(temp, 'before.sqlite'), change = { ...grant, active: false };
+    const pending = setLedgerGrantWithBackup(path, destination, change);
+    change.active = true; // The asynchronous operation must use its validated snapshot.
+    assert.throws(() => db.exec('BEGIN IMMEDIATE'));
+    await pending;
+    copy = new DatabaseSync(destination, { readOnly: true });
+    assert.equal(copy.prepare('SELECT active FROM ledger_authority_grants').get().active, 1);
+    assert.equal(db.prepare('SELECT active FROM ledger_authority_grants').get().active, 0);
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM ledger_authority_events').get().n, 2);
+    copy.close(); copy = undefined;
+    const collision = join(temp, 'existing'); writeFileSync(collision, 'preserve');
+    await assert.rejects(setLedgerGrantWithBackup(path, collision, grant));
+    assert.equal(readFileSync(collision, 'utf8'), 'preserve');
+    assert.equal(db.prepare('SELECT active FROM ledger_authority_grants').get().active, 0);
+    db.exec('BEGIN IMMEDIATE');
+    const locked = join(temp, 'locked.sqlite');
+    await assert.rejects(setLedgerGrantWithBackup(path, locked, grant));
+    db.exec('ROLLBACK');
+    assert.equal(existsSync(locked), false);
+    db.exec("CREATE TRIGGER reject_backup_audit BEFORE INSERT ON ledger_authority_events BEGIN SELECT RAISE(ABORT, 'example'); END");
+    const failed = join(temp, 'failed.sqlite');
+    await assert.rejects(setLedgerGrantWithBackup(path, failed, { ...grant, active: false }));
+    assert.equal(existsSync(failed), true);
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM ledger_authority_events').get().n, 2);
+    const recovery = join(temp, 'recovery.sqlite'), rejected = join(temp, 'recovery-before.sqlite');
+    await prepareLedgerRecovery(path, recovery);
+    await assert.rejects(setLedgerGrantWithBackup(recovery, rejected, { ...grant, active: false }));
+    assert.equal(existsSync(rejected), false);
+  } finally {
+    if (copy?.isOpen) copy.close();
+    if (db?.isOpen) db.close();
+    if (!resolve(temp).startsWith(resolve(prefix))) throw new Error('Unexpected temporary path');
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
 async function token(overrides = {}, key = keys.privateKey) {
   const jwt = await new SignJWT({ iss: issuer, sub: 'example-user', aud: audience, iat: now, exp: now + 300, jti: 'example-token', client_id: 'example-client', scope: 'ledger:read ledger:write', ...overrides })
     .setProtectedHeader({ alg: 'RS256', typ: 'at+jwt' }).sign(key);

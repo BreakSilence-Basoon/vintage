@@ -9,7 +9,6 @@ import { request as httpRequest } from 'node:http';
 import { once } from 'node:events';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { setLedgerGrant } from '@vintage/ledger-store/authority';
 import { prepareLedgerRecovery } from '@vintage/ledger-store/recovery';
 import { initializeNewLedgerDatabase } from '../src/init-db.mjs';
 import { prepareLedgerService } from '../src/main.mjs';
@@ -104,7 +103,13 @@ test('loopback flow requires a signed token and current grant for create, read, 
     assert.equal((await call(port, '/v1/facts/read', { id: fact.id }, valid, { host: 'example.invalid' })).status, 400);
     assert.equal((await call(port, '/v1/facts/read?example=1', { id: fact.id }, valid)).status, 400);
     assert.equal((await call(port, '/v1/facts/read', { id: fact.id }, null)).status, 400);
-    setLedgerGrant(service.db, { ...grant, active: false });
+    const cli = fileURLToPath(new URL('../src/manage-grant.mjs', import.meta.url)), backup = join(temp, 'before-change.sqlite');
+    const result = spawnSync(process.execPath, [cli, 'change'], { input: JSON.stringify({ ...grant, active: false }), encoding: 'utf8',
+      env: { ...process.env, VINTAGE_LEDGER_DATABASE_FILE: path, VINTAGE_LEDGER_BACKUP_FILE: backup } });
+    assert.equal(result.status, 0);
+    assert.doesNotMatch(result.stdout + result.stderr, /example-user|example-shop|example-actor/);
+    const snapshot = new DatabaseSync(backup, { readOnly: true });
+    try { assert.equal(snapshot.prepare('SELECT active FROM ledger_authority_grants').get().active, 1); } finally { snapshot.close(); }
     assert.equal((await call(port, '/v1/facts/read', { id: fact.id }, valid)).status, 503);
     assert.equal((await call(port, '/v1/facts/list', { ...filter, cursor: firstPage.body.nextCursor }, valid)).status, 503);
     assert.equal((await call(port, '/v1/facts/write', input, valid)).status, 503);
