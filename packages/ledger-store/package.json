@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "exports": { ".": "./src/index.mjs" },
+  "exports": { ".": "./src/index.mjs", "./backup": "./src/backup.mjs" },
   "scripts": { "test": "node --test test/*.test.mjs" },
   "dependencies": { "@vintage/ledger-facts": "workspace:*" }
 }
