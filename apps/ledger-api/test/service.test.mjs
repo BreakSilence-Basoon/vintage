@@ -83,11 +83,34 @@ test('loopback flow requires a signed token and current grant for create, read, 
       const created = { operationId: `create-${id}`, expectedRevision: 0, fact: { ...fact, id, type, date } };
       assert.equal((await call(port, '/v1/facts/write', created, valid)).status, 200);
     }
+    const huge = '9'.repeat(80);
+    assert.equal((await call(port, '/v1/facts/write', { operationId: 'create-large', expectedRevision: 0,
+      fact: { ...fact, id: 'example-large', date: '2026-03-01', currency: 'YYY', amountMinor: huge } }, valid)).status, 200);
+    for (const [suffix, amountMinor] of [['negative', '-100'], ['zero', '0']]) {
+      assert.equal((await call(port, '/v1/facts/write', { operationId: `create-${suffix}`, expectedRevision: 0,
+        fact: { ...fact, id: `example-${suffix}`, date: '2026-03-01', currency: 'YYY', amountMinor } }, valid)).status, 200);
+    }
+    const amountFilter = { currency: 'XXX', amountMinor: '100', limit: 1 };
+    const amountPage = await call(port, '/v1/facts/list', amountFilter, valid);
+    assert.deepEqual(amountPage.body.items.map((item) => item.fact.id), ['example-b']);
+    assert.ok(amountPage.body.nextCursor);
+    const amountNext = await call(port, '/v1/facts/list', { ...amountFilter, cursor: amountPage.body.nextCursor }, valid);
+    assert.deepEqual(amountNext.body.items.map((item) => item.fact.id), ['example-c']);
+    assert.equal((await call(port, '/v1/facts/list', { ...amountFilter, amountMinor: '200', cursor: amountPage.body.nextCursor }, valid)).status, 503);
+    assert.equal((await call(port, '/v1/facts/list', { ...amountFilter, currency: 'YYY', cursor: amountPage.body.nextCursor }, valid)).status, 503);
+    assert.deepEqual((await call(port, '/v1/facts/list', { currency: 'YYY', amountMinor: huge }, valid)).body.items.map((item) => item.fact.id), ['example-large']);
+    assert.deepEqual((await call(port, '/v1/facts/list', { currency: 'YYY', amountMinor: '-100' }, valid)).body.items.map((item) => item.fact.id), ['example-negative']);
+    assert.deepEqual((await call(port, '/v1/facts/list', { currency: 'YYY', amountMinor: '0' }, valid)).body.items.map((item) => item.fact.id), ['example-zero']);
+    assert.deepEqual((await call(port, '/v1/facts/list', { currency: 'XXX', amountMinor: huge }, valid)).body.items, []);
+    assert.equal((await call(port, '/v1/facts/list', { amountMinor: '100' }, valid)).status, 503);
+    assert.equal((await call(port, '/v1/facts/list', { currency: 'XXX', amountMinor: 100 }, valid)).status, 503);
+    assert.equal((await call(port, '/v1/facts/list', { currency: 'XXX', amountMinor: '-0' }, valid)).status, 503);
     const filter = { type: 'invoice-issued', from: '2026-01-01', to: '2026-02-01', limit: 1 };
     const firstPage = await call(port, '/v1/facts/list', filter, valid);
     assert.equal(firstPage.status, 200);
     assert.deepEqual(firstPage.body.items.map((item) => item.fact.id), ['example-a']);
     assert.ok(firstPage.body.nextCursor);
+    assert.equal((await call(port, '/v1/facts/list', { ...filter, currency: 'XXX', cursor: firstPage.body.nextCursor }, valid)).status, 503);
     assert.equal(firstPage.headers['cache-control'], 'no-store');
     const secondPage = await call(port, '/v1/facts/list', { ...filter, cursor: firstPage.body.nextCursor }, valid);
     assert.deepEqual(secondPage.body.items.map((item) => item.fact.id), ['example-b']);
@@ -124,7 +147,7 @@ test('loopback flow requires a signed token and current grant for create, read, 
     assert.equal((await call(port, '/v1/facts/history', { id: fact.id }, historyToken)).status, 503);
     assert.equal((await call(port, '/v1/facts/list', { ...filter, cursor: firstPage.body.nextCursor }, valid)).status, 503);
     assert.equal((await call(port, '/v1/facts/write', input, valid)).status, 503);
-    assert.equal(service.db.prepare('SELECT COUNT(*) AS n FROM ledger_operations').get().n, 8);
+    assert.equal(service.db.prepare('SELECT COUNT(*) AS n FROM ledger_operations').get().n, 11);
   } finally {
     if (service?.server.listening) { service.server.close(); await once(service.server, 'close'); }
     if (service?.db.isOpen) service.db.close();
