@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { validateLedgerFact } from '@vintage/ledger-facts';
 import { createLedgerAccessCheck } from '@vintage/ledger-access';
 import { authorityInstalled, lookupLedgerGrant } from './authority.mjs';
+import { listLedgerFactsInTransaction } from './list-query.mjs';
 
 const validId = (value) => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 const version = (db) => db.prepare('PRAGMA user_version').get().user_version;
@@ -112,6 +113,22 @@ export function createLedgerAuthorizedStore(db, options) {
         recheck(identity, 'read');
         const row = db.prepare('SELECT revision,fact_json FROM ledger_facts WHERE id=?').get(id);
         const result = row ? { revision: row.revision, fact: validateLedgerFact(JSON.parse(row.fact_json)) } : null;
+        db.exec('COMMIT'); begun = false;
+        return result;
+      } catch {
+        if (begun) { try { db.exec('ROLLBACK'); } catch { if (db.isTransaction) { try { db.close(); } catch {} } } }
+        throw new Error('Ledger access failed');
+      }
+    },
+    async list(authorization, query) {
+      const identity = await check(authorization, 'read');
+      if (!identity) throw new Error('Ledger access failed');
+      let begun = false;
+      try {
+        db.exec('BEGIN'); begun = true;
+        requireSupported(db, true);
+        recheck(identity, 'read');
+        const result = listLedgerFactsInTransaction(db, query);
         db.exec('COMMIT'); begun = false;
         return result;
       } catch {

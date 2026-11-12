@@ -42,7 +42,7 @@ export function prepareLedgerService(env) {
       try {
         const count = (name) => request.rawHeaders.filter((_, i) => i % 2 === 0 && request.rawHeaders[i].toLowerCase() === name).length;
         const length = request.headers['content-length'], address = server.address();
-        if (request.method !== 'POST' || !['/v1/facts/read', '/v1/facts/write'].includes(request.url) ||
+        if (request.method !== 'POST' || !['/v1/facts/read', '/v1/facts/list', '/v1/facts/write'].includes(request.url) ||
             request.headers.host !== `127.0.0.1:${address.port}` || count('host') !== 1 || count('authorization') !== 1 ||
             count('content-type') !== 1 || count('content-length') !== 1 || request.headers.cookie || request.headers.origin ||
             request.headers['transfer-encoding'] || request.headers['content-encoding'] || !/^\d{1,5}$/.test(length ?? '') || Number(length) < 1 || Number(length) > 8192 ||
@@ -58,6 +58,7 @@ export function prepareLedgerService(env) {
         catch { return reply(400, { error: 'invalid_request' }); }
         if (!input || typeof input !== 'object' || Array.isArray(input)) return reply(400, { error: 'invalid_request' });
         try {
+          if (request.url === '/v1/facts/list') return reply(200, await store.list(request.headers.authorization, input));
           if (request.url === '/v1/facts/read') {
             if (Object.keys(input).length !== 1 || !Object.hasOwn(input, 'id')) return reply(400, { error: 'invalid_request' });
             const result = await store.read(request.headers.authorization, input.id);
