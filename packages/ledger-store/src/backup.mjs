@@ -2,7 +2,7 @@ import { closeSync, linkSync, lstatSync, mkdtempSync, openSync, rmdirSync, unlin
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { backup, DatabaseSync } from 'node:sqlite';
 
-function verifyStructure(db) {
+export function verifyStructure(db) {
   const integrity = db.prepare('PRAGMA integrity_check').all();
   const version = db.prepare('PRAGMA user_version').get().user_version;
   if (integrity.length !== 1 || integrity[0].integrity_check !== 'ok' ||

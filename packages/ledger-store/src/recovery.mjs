@@ -1,7 +1,7 @@
-import { linkSync, lstatSync, mkdtempSync, rmdirSync, unlinkSync } from 'node:fs';
+import { linkSync, lstatSync, mkdtempSync, realpathSync, rmdirSync, statSync, unlinkSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { copyLedgerDatabase } from './backup.mjs';
+import { copyLedgerDatabase, verifyStructure } from './backup.mjs';
 
 const validId = (value) => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 const validReason = (value) => typeof value === 'string' && value.length >= 1 && value.length <= 500 && value === value.trim() && !/[\x00-\x1f\x7f]/.test(value);
@@ -63,5 +63,50 @@ export function unlockLedgerRecovery(db, input) {
   } catch {
     if (begun) { try { db.exec('ROLLBACK'); } catch { if (db.isTransaction) { try { db.close(); } catch {} } } }
     throw new Error('Ledger recovery unlock failed');
+  }
+}
+
+function compareRows(left, right, sql, key) {
+  const a = left.prepare(sql).iterate()[Symbol.iterator](), b = right.prepare(sql).iterate()[Symbol.iterator]();
+  const counts = { onlyRecovery: 0, onlyReference: 0, changed: 0, equal: 0 };
+  let x = a.next(), y = b.next();
+  while (!x.done || !y.done) {
+    if ((!x.done && !validId(x.value[key])) || (!y.done && !validId(y.value[key]))) throw new Error('Invalid identifier');
+    if (y.done || (!x.done && x.value[key] < y.value[key])) { counts.onlyRecovery++; x = a.next(); }
+    else if (x.done || y.value[key] < x.value[key]) { counts.onlyReference++; y = b.next(); }
+    else {
+      if (JSON.stringify(x.value) === JSON.stringify(y.value)) counts.equal++; else counts.changed++;
+      x = a.next(); y = b.next();
+    }
+    if (Object.values(counts).some((count) => !Number.isSafeInteger(count))) throw new Error('Too many records');
+  }
+  return counts;
+}
+
+// Offline, read-only aggregate comparison; it does not establish that the reference is current or complete.
+export function compareLedgerRecovery(recoveryPath, referencePath) {
+  let recovery, reference;
+  try {
+    if (!isAbsolute(recoveryPath ?? '') || !isAbsolute(referencePath ?? '') ||
+        !lstatSync(recoveryPath).isFile() || !lstatSync(referencePath).isFile() ||
+        realpathSync(recoveryPath) === realpathSync(referencePath)) throw new Error('Invalid paths');
+    const a = statSync(recoveryPath), b = statSync(referencePath);
+    if (a.ino && b.ino && a.dev === b.dev && a.ino === b.ino) throw new Error('Same file');
+    recovery = new DatabaseSync(recoveryPath, { readOnly: true });
+    reference = new DatabaseSync(referencePath, { readOnly: true });
+    recovery.exec('BEGIN'); reference.exec('BEGIN');
+    verifyStructure(recovery); verifyStructure(reference);
+    if (recovery.prepare('PRAGMA user_version').get().user_version !== 2 ||
+        recovery.prepare('SELECT status FROM ledger_recovery_guard WHERE id=1').get()?.status !== 'pending') throw new Error('Recovery review required');
+    const facts = compareRows(recovery, reference, 'SELECT id,revision,fact_json FROM ledger_facts ORDER BY id', 'id');
+    const operations = compareRows(recovery, reference,
+      'SELECT operation_id,actor_id,fingerprint,fact_id,revision,before_json,after_json,recorded_at FROM ledger_operations ORDER BY operation_id', 'operation_id');
+    return { facts, operations };
+  } catch { throw new Error('Ledger recovery comparison failed'); }
+  finally {
+    if (reference?.isTransaction) { try { reference.exec('ROLLBACK'); } catch {} }
+    if (recovery?.isTransaction) { try { recovery.exec('ROLLBACK'); } catch {} }
+    if (reference?.isOpen) reference.close();
+    if (recovery?.isOpen) recovery.close();
   }
 }
