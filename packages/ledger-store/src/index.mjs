@@ -3,6 +3,14 @@ import { validateLedgerFact } from '@vintage/ledger-facts';
 
 const validId = (value) => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 const version = (db) => db.prepare('PRAGMA user_version').get().user_version;
+function requireSupported(db, writable) {
+  const current = version(db);
+  if (current === 1) return;
+  if (current !== 2) throw new Error('Invalid version');
+  const guard = db.prepare('SELECT status,generation FROM ledger_recovery_guard WHERE id=1').get();
+  if (!guard || !['pending', 'unlocked'].includes(guard.status) || !Number.isSafeInteger(guard.generation) || guard.generation < 1 ||
+      (writable && guard.status !== 'unlocked')) throw new Error('Recovery review required');
+}
 
 // One independently controlled database. Authentication, authorization and file protection are caller responsibilities.
 export function initializeLedgerStore(db) {
@@ -37,7 +45,7 @@ export function writeLedgerFact(db, input) {
     const fingerprint = createHash('sha256').update(JSON.stringify([input.actorId, input.expectedRevision, fact])).digest('hex');
     db.exec('PRAGMA foreign_keys = ON');
     db.exec('BEGIN IMMEDIATE'); begun = true;
-    if (version(db) !== 1) throw new Error('Invalid version');
+    requireSupported(db, true);
     const previousOperation = db.prepare('SELECT fingerprint,fact_id,revision FROM ledger_operations WHERE operation_id=?').get(input.operationId);
     if (previousOperation) {
       if (previousOperation.fingerprint !== fingerprint) throw new Error('Operation conflict');
@@ -65,7 +73,8 @@ export function writeLedgerFact(db, input) {
 // Do not expose this unauthenticated; the caller must first authorize access to the record.
 export function readLedgerFact(db, id) {
   try {
-    if (!validId(id) || version(db) !== 1) throw new Error('Invalid input');
+    if (!validId(id)) throw new Error('Invalid input');
+    requireSupported(db, false);
     const row = db.prepare('SELECT revision,fact_json FROM ledger_facts WHERE id=?').get(id);
     return row ? { revision: row.revision, fact: validateLedgerFact(JSON.parse(row.fact_json)) } : null;
   } catch { throw new Error('Ledger read failed'); }
