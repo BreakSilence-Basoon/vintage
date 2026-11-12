@@ -67,8 +67,11 @@ test('loopback flow requires a signed token and current grant for create, read, 
     assert.equal(first.status, 200); assert.equal(first.body.replayed, false); assert.equal(first.headers['cache-control'], 'no-store');
     assert.equal((await call(port, '/v1/facts/write', input, valid)).body.replayed, true);
     assert.equal((await call(port, '/v1/facts/read', { id: fact.id }, valid)).body.fact.amountMinor, '100');
-    const corrected = { operationId: 'operation-b', expectedRevision: 1, fact: { ...fact, amountMinor: '200' } };
+    const corrected = { operationId: 'operation-b', expectedRevision: 1, fact: { ...fact, amountMinor: '200', description: 'Example paper' } };
     assert.equal((await call(port, '/v1/facts/write', corrected, valid)).body.revision, 2);
+    assert.equal((await call(port, '/v1/facts/write', corrected, valid)).body.replayed, true);
+    assert.equal((await call(port, '/v1/facts/write', { ...corrected, fact: { ...corrected.fact, description: 'Other item' } }, valid)).status, 503);
+    assert.equal((await call(port, '/v1/facts/read', { id: fact.id }, valid)).body.fact.description, 'Example paper');
     const historyToken = await signed({ scope: 'ledger:read ledger:history' });
     assert.equal((await call(port, '/v1/facts/history', { id: fact.id }, valid)).status, 503);
     assert.equal((await call(port, '/v1/facts/history', { id: fact.id }, await signed({ scope: 'ledger:history' }))).status, 503);
@@ -78,11 +81,25 @@ test('loopback flow requires a signed token and current grant for create, read, 
     assert.doesNotMatch(JSON.stringify(history.body), /example-actor|operation-a/);
     const nextHistory = await call(port, '/v1/facts/history', { id: fact.id, afterRevision: 1 }, historyToken);
     assert.equal(nextHistory.body.items[0].fact.amountMinor, '200'); assert.equal(nextHistory.body.nextAfterRevision, null);
+    assert.equal(nextHistory.body.items[0].fact.description, 'Example paper');
     assert.equal((await call(port, '/v1/facts/history', { id: fact.id, limit: 101 }, historyToken)).status, 503);
     for (const [id, type, date] of [['example-b','invoice-issued','2026-01-31'], ['example-c','payment-made','2026-01-15'], ['example-d','invoice-issued','2026-02-01']]) {
-      const created = { operationId: `create-${id}`, expectedRevision: 0, fact: { ...fact, id, type, date } };
+      const created = { operationId: `create-${id}`, expectedRevision: 0, fact: { ...fact, id, type, date, description: `Example paper ${'界'.repeat(100)}` } };
       assert.equal((await call(port, '/v1/facts/write', created, valid)).status, 200);
     }
+    const descriptionFilter = { descriptionContains: 'paper', limit: 1 };
+    const descriptionPage = await call(port, '/v1/facts/list', descriptionFilter, valid);
+    assert.deepEqual(descriptionPage.body.items.map((item) => item.fact.id), ['example-a']);
+    const descriptionNext = await call(port, '/v1/facts/list', { ...descriptionFilter, cursor: descriptionPage.body.nextCursor }, valid);
+    assert.deepEqual(descriptionNext.body.items.map((item) => item.fact.id), ['example-b']);
+    assert.equal((await call(port, '/v1/facts/list', { ...descriptionFilter, descriptionContains: 'Example', cursor: descriptionPage.body.nextCursor }, valid)).status, 503);
+    assert.deepEqual((await call(port, '/v1/facts/list', { descriptionContains: '%' }, valid)).body.items, []);
+    assert.equal((await call(port, '/v1/facts/list', { descriptionContains: '' }, valid)).status, 503);
+    assert.equal((await call(port, '/v1/facts/list', { descriptionContains: '\ud800' }, valid)).status, 503);
+    const longFilter = { descriptionContains: '界'.repeat(100), currency: 'XXX', amountMinor: '100', limit: 1 };
+    const longPage = await call(port, '/v1/facts/list', longFilter, valid);
+    assert.deepEqual(longPage.body.items.map((item) => item.fact.id), ['example-b']);
+    assert.deepEqual((await call(port, '/v1/facts/list', { ...longFilter, cursor: longPage.body.nextCursor }, valid)).body.items.map((item) => item.fact.id), ['example-c']);
     const huge = '9'.repeat(80);
     assert.equal((await call(port, '/v1/facts/write', { operationId: 'create-large', expectedRevision: 0,
       fact: { ...fact, id: 'example-large', date: '2026-03-01', currency: 'YYY', amountMinor: huge } }, valid)).status, 200);
@@ -127,6 +144,7 @@ test('loopback flow requires a signed token and current grant for create, read, 
     }
     assert.equal((await call(port, '/v1/facts/write', { operationId: 'move-b', expectedRevision: 1,
       fact: { ...fact, id: 'example-b', date: '2026-02-02' } }, valid)).status, 200);
+    assert.equal(Object.hasOwn((await call(port, '/v1/facts/read', { id: 'example-b' }, valid)).body.fact, 'description'), false);
     const changedPage = await call(port, '/v1/facts/list', { ...filter, cursor: firstPage.body.nextCursor }, valid);
     assert.deepEqual(changedPage.body.items.map((item) => item.fact.id), ['example-z']); // Earlier insert is outside this page; changed record left the filter.
     assert.equal((await call(port, '/v1/facts/write', input, await signed({}, otherKeys.privateKey))).status, 503);

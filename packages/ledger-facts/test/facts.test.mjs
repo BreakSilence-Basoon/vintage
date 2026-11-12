@@ -17,6 +17,7 @@ test('records each explicit fact independently and preserves exact integer strin
   }
   assert.equal(validateLedgerFact({ ...example, amountMinor: '-5' }).amountMinor, '-5');
   assert.equal(validateLedgerFact({ ...example, amountMinor: '0' }).amountMinor, '0');
+  assert.deepEqual(validateLedgerFact({ ...example, description: 'Example item' }), { ...example, description: 'Example item' });
 });
 
 test('rejects invalid shapes without echoing the input', () => {
@@ -24,6 +25,8 @@ test('rejects invalid shapes without echoing the input', () => {
     { ...example, date: '2023-02-29' }, { ...example, date: '0000-01-01' }, { ...example, date: '2024-13-01' },
     { ...example, currency: 'xx' }, { ...example, currency: 'xxx' }, { ...example, amountMinor: 100 },
     { ...example, amountMinor: '1.00' }, { ...example, amountMinor: '-0' }, { ...example, amountMinor: '01' },
-    { ...example, amountMinor: '9'.repeat(81) }, { ...example, extra: 'example-secret' }];
+    { ...example, amountMinor: '9'.repeat(81) }, { ...example, extra: 'example-secret' },
+    { ...example, description: '' }, { ...example, description: ' leading' }, { ...example, description: 'a\nb' },
+    { ...example, description: 'x'.repeat(501) }, { ...example, description: null }, { ...example, description: '\ud800' }];
   for (const input of invalid) assert.throws(() => validateLedgerFact(input), (error) => error.message === 'Invalid ledger fact');
 });

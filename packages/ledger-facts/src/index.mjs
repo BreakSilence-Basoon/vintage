@@ -10,12 +10,15 @@ function validDate(value) {
 
 export function validateLedgerFact(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input) ||
-      Object.keys(input).length !== keys.length || keys.some((key) => !Object.hasOwn(input, key)) ||
+      Object.keys(input).some((key) => !keys.includes(key) && key !== 'description') || keys.some((key) => !Object.hasOwn(input, key)) ||
       typeof input.id !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(input.id) ||
       !types.has(input.type) || !validDate(input.date) ||
       typeof input.currency !== 'string' || !/^[A-Z]{3}$/.test(input.currency) ||
-      typeof input.amountMinor !== 'string' || !/^(?:0|[1-9][0-9]{0,79}|-[1-9][0-9]{0,79})$/.test(input.amountMinor)) {
+      typeof input.amountMinor !== 'string' || !/^(?:0|[1-9][0-9]{0,79}|-[1-9][0-9]{0,79})$/.test(input.amountMinor) ||
+      (Object.hasOwn(input, 'description') && (typeof input.description !== 'string' || input.description.length < 1 || input.description.length > 500 ||
+        !input.description.isWellFormed() || input.description !== input.description.trim() || /[\x00-\x1f\x7f]/.test(input.description)))) {
     throw new Error('Invalid ledger fact');
   }
-  return Object.freeze({ id: input.id, type: input.type, date: input.date, currency: input.currency, amountMinor: input.amountMinor });
+  return Object.freeze({ id: input.id, type: input.type, date: input.date, currency: input.currency, amountMinor: input.amountMinor,
+    ...(Object.hasOwn(input, 'description') ? { description: input.description } : {}) });
 }
