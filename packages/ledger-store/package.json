@@ -3,7 +3,8 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "exports": { ".": "./src/index.mjs", "./backup": "./src/backup.mjs", "./recovery": "./src/recovery.mjs" },
+  "exports": { ".": "./src/index.mjs", "./backup": "./src/backup.mjs", "./recovery": "./src/recovery.mjs", "./authority": "./src/authority.mjs" },
   "scripts": { "test": "node --test test/*.test.mjs" },
-  "dependencies": { "@vintage/ledger-facts": "workspace:*" }
+  "dependencies": { "@vintage/ledger-facts": "workspace:*", "@vintage/ledger-access": "workspace:*" },
+  "devDependencies": { "jose": "6.2.17" }
 }
