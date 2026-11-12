@@ -1,3 +1,7 @@
+import { lstatSync } from 'node:fs';
+import { isAbsolute } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
+
 const id = (value) => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 const subject = (value) => typeof value === 'string' && value.length > 0 && value.length <= 512 && value === value.trim();
 const reason = (value) => typeof value === 'string' && value.length > 0 && value.length <= 500 && value === value.trim() && !/[\x00-\x1f\x7f]/.test(value);
@@ -44,13 +48,17 @@ export function initializeLedgerAuthority(db, businessId) {
 }
 
 // Trusted local operator only; it does not authenticate or decide which person deserves a grant.
-export function setLedgerGrant(db, input) {
-  if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).length !== 9 ||
-      !['issuer','subject','actorId','active','read','write','tokenValidAfter','operatorId','reason'].every((key) => Object.hasOwn(input, key)) ||
+function validateGrant(input) {
+  const keys = ['issuer','subject','actorId','active','read','write','tokenValidAfter','operatorId','reason'];
+  if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).length !== 9 || !keys.every((key) => Object.hasOwn(input, key))) throw new Error('Ledger authority operation failed');
+  input = Object.fromEntries(keys.map((key) => [key, input[key]]));
+  if (
       !issuer(input.issuer) || !subject(input.subject) || !id(input.actorId) || !id(input.operatorId) || !reason(input.reason) ||
       typeof input.active !== 'boolean' || typeof input.read !== 'boolean' || typeof input.write !== 'boolean' || (input.write && !input.read) ||
       !Number.isSafeInteger(input.tokenValidAfter) || input.tokenValidAfter < 0) throw new Error('Ledger authority operation failed');
-  return transaction(db, () => {
+  return Object.freeze(input);
+}
+function applyGrant(db, input) {
     if (!db.prepare('SELECT business_id FROM ledger_authority_config WHERE id=1').get()) throw new Error('Not configured');
     const old = db.prepare('SELECT issuer,subject,actor_id,active,can_read,can_write,token_valid_after FROM ledger_authority_grants WHERE issuer=? AND subject=?').get(input.issuer, input.subject);
     if (old && (old.actor_id !== input.actorId || input.tokenValidAfter < old.token_valid_after ||
@@ -61,7 +69,30 @@ export function setLedgerGrant(db, input) {
     const after = db.prepare('SELECT issuer,subject,actor_id,active,can_read,can_write,token_valid_after FROM ledger_authority_grants WHERE issuer=? AND subject=?').get(input.issuer, input.subject);
     db.prepare('INSERT INTO ledger_authority_events (operator_id,reason,before_json,after_json,recorded_at) VALUES (?,?,?,?,?)')
       .run(input.operatorId, input.reason, old ? JSON.stringify(old) : null, JSON.stringify(after), new Date().toISOString());
-  });
+}
+export function setLedgerGrant(db, input) {
+  const grant = validateGrant(input);
+  return transaction(db, () => applyGrant(db, grant));
+}
+
+// Trusted local operator: lock the same DB through a verified pre-change backup and grant mutation.
+export async function setLedgerGrantWithBackup(path, backupPath, input) {
+  let db, begun = false;
+  try {
+    const grant = validateGrant(input);
+    if (!isAbsolute(path ?? '') || !lstatSync(path).isFile()) throw new Error('Existing database required');
+    db = new DatabaseSync(path);
+    db.exec('BEGIN IMMEDIATE'); begun = true;
+    requireWritable(db);
+    const { copyLedgerDatabase } = await import('./backup.mjs');
+    await copyLedgerDatabase(path, backupPath);
+    applyGrant(db, grant);
+    db.exec('COMMIT'); begun = false;
+  } catch { throw new Error('Ledger authority operation failed'); }
+  finally {
+    if (begun && db?.isOpen) { try { db.exec('ROLLBACK'); } catch {} }
+    if (db?.isOpen) db.close();
+  }
 }
 
 export function lookupLedgerGrant(db, identity) {

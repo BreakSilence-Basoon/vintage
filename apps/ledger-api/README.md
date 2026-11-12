@@ -16,6 +16,10 @@
 
 Node.js 24와 이 저장소의 pnpm 설정을 사용합니다. `init-db`는 `VINTAGE_LEDGER_DATABASE_FILE`에 아직 없는 절대 경로를 지정하고 표준 입력 JSON으로 `businessId`와 `grant`를 받아 빈 DB와 첫 명시적 권한을 만듭니다. `grant`는 신뢰된 운영자가 확인한 `issuer`, `subject`, `actorId`, `active`, `read`, `write`, `tokenValidAfter`, `operatorId`, `reason`을 포함해야 합니다. 이 명령은 입력자의 신원이나 권한의 정당성을 검증하지 않습니다. 실패해도 새 불완전 파일이 남을 수 있으므로 보존하고 확인한 뒤 조치해야 합니다.
 
+신뢰된 로컬 운영자는 `change-grant`에 같은 `grant` JSON을 표준 입력으로 전달해 명시적 권한을 변경할 수 있습니다. `VINTAGE_LEDGER_DATABASE_FILE`은 기존 DB의 절대 경로이고 `VINTAGE_LEDGER_BACKUP_FILE`은 아직 없는 백업 파일의 절대 경로입니다. 변경 전 같은 DB의 쓰기를 잠그고 백업을 만들어 검사한 후 권한과 감사 기록을 함께 변경합니다. 실패해도 백업 또는 임시 파일이 남을 수 있습니다. 서버를 중지하고 검토하는 운용을 권장합니다. 재활성화나 권한 확대에는 현재 시각보다 이후의 `tokenValidAfter`가 필요하며 시계와 토큰 발급을 확인해야 합니다. 이 명령은 운영자를 인증하거나 권한의 정당성을 결정하지 않습니다.
+
+백업에는 예전 권한과 민감한 기록이 남을 수 있으므로 DB와 백업 및 임시 파일을 보호해야 합니다. 이전 백업을 그대로 복사해 사용하지 말고 복구 검토와 권한 대조 절차를 거쳐야 합니다. 파일 접근권한과 암호화는 이 명령이 보장하지 않습니다. 백업 중 DB 경로를 바꾸거나 파일을 교체할 수 있는 다른 작업이 없도록 운영자가 보장해야 합니다.
+
 실험용 `start`는 위 DB 경로 외에 `VINTAGE_LEDGER_JWKS_FILE`, `VINTAGE_LEDGER_PORT`, `VINTAGE_LEDGER_ISSUER`, `VINTAGE_LEDGER_AUDIENCE`, `VINTAGE_LEDGER_CLIENT_ID`, `VINTAGE_LEDGER_BUSINESS_ID`, `VINTAGE_LEDGER_READ_SCOPE`, `VINTAGE_LEDGER_WRITE_SCOPE`가 필요합니다. 사업장 값은 DB 설정과 같아야 하고 범위는 서로 달라야 합니다. DB와 공개 키 파일은 이미 존재하는 일반 파일의 절대 경로여야 합니다. 복구 확인이 끝나지 않은 사본은 시작하지 않습니다.
 
 설치자에게 제공하는 완성된 지침은 아직 아닙니다. 자유 텍스트 검색, 요청 빈도 제한, DB·백업·임시 파일의 OS 접근권한과 암호화, 실제 신원 확인·권한 회수·복구, 토큰 보호, 증빙 수집, 통화 규칙, 대량 성능과 실제 업무 수락을 먼저 구현하고 검증해야 합니다. 과거 백업의 일반 복사는 예전 권한을 되살릴 수 있으며, 복구용 사본도 백업 이후 거래·외부 작업 대조가 필요합니다. [저장·복구 실험의 한계](../../packages/ledger-store/README.md)를 확인하세요.
