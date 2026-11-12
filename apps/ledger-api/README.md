@@ -20,6 +20,19 @@ Node.js 24와 이 저장소의 pnpm 설정을 사용합니다. `init-db`는 `VIN
 
 백업에는 예전 권한과 민감한 기록이 남을 수 있으므로 DB와 백업 및 임시 파일을 보호해야 합니다. 이전 백업을 그대로 복사해 사용하지 말고 복구 검토와 권한 대조 절차를 거쳐야 합니다. 파일 접근권한과 암호화는 이 명령이 보장하지 않습니다. 백업 중 DB 경로를 바꾸거나 파일을 교체할 수 있는 다른 작업이 없도록 운영자가 보장해야 합니다.
 
+### 로컬 백업과 복구 시험
+
+`pnpm --filter @vintage/ledger-api recovery <명령>`은 신뢰된 로컬 담당자가 오프라인에서 사용하는 시험 명령입니다. 아래 경로는 모두 절대 경로입니다. 실제 자료를 넣기 위한 운영 절차가 아니며, DB와 백업·임시 파일을 보호하는 기능도 아닙니다.
+
+| 명령 | 환경변수와 동작 |
+|---|---|
+| `backup` | `VINTAGE_LEDGER_DATABASE_FILE`의 기존 DB에서 `VINTAGE_LEDGER_DESTINATION_FILE`에 새 백업을 만듭니다. 기존 파일은 덮어쓰지 않습니다. |
+| `prepare` | `VINTAGE_LEDGER_DATABASE_FILE`의 백업으로 `VINTAGE_LEDGER_DESTINATION_FILE`에 검토 대기 복구 사본을 만듭니다. 기록 쓰기를 막고 기존 사용자 권한을 비활성화합니다. |
+| `compare` | `VINTAGE_LEDGER_DATABASE_FILE`의 검토 대기 사본을 `VINTAGE_LEDGER_REFERENCE_FILE`과 읽기 전용으로 비교해 기록·작업의 차이 건수만 출력합니다. 두 DB를 쓰지 않는 동안 실행해야 합니다. |
+| `unlock` | `VINTAGE_LEDGER_DATABASE_FILE`의 검토 대기 사본에 표준 입력 JSON `operatorId`, `reason`, `reconciled: true`를 전달해 담당자의 확인을 기록하고 쓰기 차단을 해제합니다. 사용자 권한을 다시 켜지는 않습니다. |
+
+비교는 담당자가 지정한 기준이 최신인지, 같은 사업장인지 또는 외부에서 처리한 작업이 빠졌는지 확인하지 않으며 사용자 권한도 비교하지 않습니다. 차이가 0이어도 복구가 완전하다는 뜻은 아닙니다. `unlock`은 비교 실행을 강제하지 않으며 입력된 확인을 사실이나 담당자의 신원으로 검증하지 않습니다. 실제 대조를 끝내기 전에는 해제하지 마세요. 이 명령은 사본을 운영 DB에 자동 적용하지 않습니다. 실패해도 대상 또는 임시 파일이 남을 수 있으므로 확인 전 보존해야 합니다. [복구 실험의 상세 한계](../../packages/ledger-store/README.md)를 함께 확인하세요.
+
 실험용 `start`는 위 DB 경로 외에 `VINTAGE_LEDGER_JWKS_FILE`, `VINTAGE_LEDGER_PORT`, `VINTAGE_LEDGER_ISSUER`, `VINTAGE_LEDGER_AUDIENCE`, `VINTAGE_LEDGER_CLIENT_ID`, `VINTAGE_LEDGER_BUSINESS_ID`, `VINTAGE_LEDGER_READ_SCOPE`, `VINTAGE_LEDGER_WRITE_SCOPE`가 필요합니다. 사업장 값은 DB 설정과 같아야 하고 범위는 서로 달라야 합니다. DB와 공개 키 파일은 이미 존재하는 일반 파일의 절대 경로여야 합니다. 복구 확인이 끝나지 않은 사본은 시작하지 않습니다.
 
 ## 실제 로그인 연결 전 확인할 조건
