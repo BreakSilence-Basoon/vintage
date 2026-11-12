@@ -5,14 +5,14 @@ import { historyOverlaps, validTimestamp } from './history-rules.mjs';
 const id = (value) => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 const revision = (value) => Number.isSafeInteger(value) && value > 0;
 const duration = (value) => Number.isSafeInteger(value) && value >= 0 && value <= 7 * 86400000;
+const validInput = (input) => input && typeof input === 'object' && !Array.isArray(input) &&
+  !Object.keys(input).some((key) => !['shiftId', 'expectedRevision'].includes(key)) && id(input.shiftId) && revision(input.expectedRevision);
+const validPolicy = (policy) => policy && typeof policy === 'object' && !Array.isArray(policy) &&
+  !Object.keys(policy).some((key) => !['earlyWindowMs', 'lateWindowMs'].includes(key)) && duration(policy.earlyWindowMs) && duration(policy.lateWindowMs);
 
 // Identity, policy and caller authorization are trusted server inputs; this is not an HTTP endpoint.
 export function confirmScheduledAttendance(db, identity, challenge, purpose, input, policy) {
-  if (!input || typeof input !== 'object' || Array.isArray(input) ||
-      Object.keys(input).some((key) => !['shiftId', 'expectedRevision'].includes(key)) || !id(input.shiftId) || !revision(input.expectedRevision) ||
-      !policy || typeof policy !== 'object' || Array.isArray(policy) ||
-      Object.keys(policy).some((key) => !['earlyWindowMs', 'lateWindowMs'].includes(key)) ||
-      !duration(policy.earlyWindowMs) || !duration(policy.lateWindowMs)) throw new Error('Scheduled attendance failed');
+  if (!validInput(input) || !validPolicy(policy)) throw new Error('Scheduled attendance failed');
   try {
     return consumeKioskChallenge(db, identity, challenge, purpose, ({ businessId, staffId, deviceId, locationId }) => {
       if (db.prepare('PRAGMA user_version').get().user_version !== 14) throw new Error('Migration required');
@@ -60,8 +60,7 @@ export function getScheduledAttendanceReceipt(db, identity, challenge, purpose, 
     const part = (value) => typeof value === 'string' && value.length > 0 && value.length <= 2048 && value === value.trim();
     if (!identity || !part(identity.issuer) || !part(identity.subject) || !Number.isSafeInteger(identity.issuedAt) || identity.issuedAt < 0 ||
         typeof challenge !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(challenge) || !['clock-in', 'clock-out'].includes(purpose) ||
-        !input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some((key) => !['shiftId', 'expectedRevision'].includes(key)) ||
-        !id(input.shiftId) || !revision(input.expectedRevision) || db.prepare('PRAGMA user_version').get().user_version !== 14) throw new Error('Invalid input');
+        !validInput(input) || db.prepare('PRAGMA user_version').get().user_version !== 14) throw new Error('Invalid input');
     const row = db.prepare(`SELECT h.id AS record_id,h.starts_at,h.ends_at,e.created_at
       FROM memberships m JOIN kiosk_challenges c ON c.business_id=m.business_id AND c.actor_staff_id=m.staff_id
       JOIN scheduled_attendance_events e ON e.challenge_digest=c.digest AND e.business_id=c.business_id AND e.staff_id=m.staff_id AND e.device_id=c.device_id AND e.purpose=c.purpose
@@ -77,4 +76,19 @@ export function getScheduledAttendanceReceipt(db, identity, challenge, purpose, 
     if (!row) return null;
     return { recordId: row.record_id, startsAt: row.starts_at, endsAt: purpose === 'clock-in' ? null : row.created_at };
   } catch { throw new Error('Scheduled attendance receipt unavailable'); }
+}
+
+// Trusted server entry point: an unresolved result never proves that no operation committed.
+// Identity and policy must come from the authenticated and configured server, not request data.
+export function submitScheduledAttendance(db, identity, challenge, purpose, input, policy) {
+  if (!validInput(input) || !validPolicy(policy)) return { status: 'unresolved' };
+  try {
+    return { status: 'confirmed', receipt: confirmScheduledAttendance(db, identity, challenge, purpose, input, policy) };
+  } catch {
+    try {
+      const receipt = getScheduledAttendanceReceipt(db, identity, challenge, purpose, input);
+      if (receipt) return { status: 'confirmed', receipt };
+    } catch { /* The transaction or receipt lookup may still be unavailable. */ }
+    return { status: 'unresolved' };
+  }
 }

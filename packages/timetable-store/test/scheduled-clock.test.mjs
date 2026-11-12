@@ -9,14 +9,100 @@ import { createHash } from 'node:crypto';
 import { initializeTimetableStore } from '../src/index.mjs';
 import { migrateWithBackup } from '../src/operations.mjs';
 import { applyAuthenticatedOperation } from '../src/admin.mjs';
-import { registerKiosk, issueKioskChallenge } from '../src/kiosk.mjs';
-import { confirmScheduledAttendance, getScheduledAttendanceReceipt } from '../src/scheduled-clock.mjs';
+import { registerKiosk, revokeKiosk, issueKioskChallenge } from '../src/kiosk.mjs';
+import { confirmScheduledAttendance, getScheduledAttendanceReceipt, submitScheduledAttendance } from '../src/scheduled-clock.mjs';
 import { prepareRestoredDatabase } from '../src/prepare-restore.mjs';
 import { unlockRecoveredAdmin } from '../src/recover-admin.mjs';
 
 const issuer = 'https://identity.example.invalid';
 const identity = (subject) => ({ issuer, subject, issuedAt: Math.floor(Date.now() / 1000) });
 const policy = { earlyWindowMs: 3600000, lateWindowMs: 3600000 };
+
+test('server submission recovers a lost committed result and leaves ambiguous failures unresolved', async (t) => {
+  const prefix = join(tmpdir(), 'vintage-submit-'), temp = mkdtempSync(prefix);
+  let db, holder;
+  try {
+    t.mock.timers.enable({ apis: ['Date'] });
+    const path = join(temp, 'fixture.sqlite'), now = Date.now();
+    const fixture = await setup(path, temp, new Date(now - 60000).toISOString(), new Date(now + 3600000).toISOString());
+    db = fixture.db;
+    const user = identity('example-user'), input = { shiftId: 'shift-a', expectedRevision: 1 };
+    const challenge = issueKioskChallenge(db, fixture.first, 'clock-in', 60);
+    const submit = (who = user, value = challenge, requested = input, settings = policy) =>
+      submitScheduledAttendance(db, who, value, 'clock-in', requested, settings);
+    holder = new DatabaseSync(path);
+    holder.exec('BEGIN IMMEDIATE');
+    try { assert.deepEqual(submit(), { status: 'unresolved' }); }
+    finally { holder.exec('ROLLBACK'); }
+    const execute = db.exec.bind(db);
+    db.exec = (sql) => { const result = execute(sql); if (sql === 'COMMIT') throw new Error('Simulated lost result'); return result; };
+    let first;
+    try { first = submit(); } finally { db.exec = execute; }
+    assert.equal(first.status, 'confirmed');
+    assert.ok(first.receipt.recordId);
+    assert.deepEqual(submit(), first);
+    assert.deepEqual(submit(identity('example-other')), { status: 'unresolved' });
+    assert.deepEqual(submit(identity('example-foreign')), { status: 'unresolved' });
+    assert.deepEqual(submit(user, challenge, { ...input, expectedRevision: 2 }), { status: 'unresolved' });
+    assert.deepEqual(submit(user, challenge, input, { earlyWindowMs: 0 }), { status: 'unresolved' });
+    db.prepare('UPDATE memberships SET active=0 WHERE subject=?').run('example-user');
+    assert.deepEqual(submit(), { status: 'unresolved' });
+    db.prepare('UPDATE memberships SET active=1 WHERE subject=?').run('example-user');
+    t.mock.timers.tick(1000);
+    const checkout = issueKioskChallenge(db, fixture.first, 'clock-out', 60);
+    const close = () => submitScheduledAttendance(db, user, checkout, 'clock-out', input, policy);
+    const closed = close();
+    assert.equal(closed.status, 'confirmed');
+    assert.equal(closed.receipt.recordId, first.receipt.recordId);
+    assert.deepEqual(close(), closed);
+    revokeKiosk(db, fixture.admin, 'device-a');
+    assert.deepEqual(submit(), first);
+    assert.deepEqual(close(), closed);
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM history').get().n, 1);
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM scheduled_attendance_events').get().n, 2);
+  } finally {
+    if (holder?.isOpen) holder.close();
+    if (db?.isOpen) db.close();
+    if (!resolve(temp).startsWith(resolve(prefix))) throw new Error('Unexpected temporary path');
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test('concurrent retries of the same server submission converge after contention', async () => {
+  const prefix = join(tmpdir(), 'vintage-submit-race-'), temp = mkdtempSync(prefix);
+  let db;
+  try {
+    const path = join(temp, 'fixture.sqlite'), now = Date.now();
+    const fixture = await setup(path, temp, new Date(now - 60000).toISOString(), new Date(now + 3600000).toISOString());
+    db = fixture.db;
+    const challenge = issueKioskChallenge(db, fixture.first, 'clock-in', 60);
+    db.close();
+    const moduleUrl = new URL('../src/scheduled-clock.mjs', import.meta.url).href;
+    const program = `import { DatabaseSync } from 'node:sqlite'; import { submitScheduledAttendance } from ${JSON.stringify(moduleUrl)};
+      let challenge=''; for await (const part of process.stdin) challenge+=part;
+      const db=new DatabaseSync(process.argv[1]);
+      const result=submitScheduledAttendance(db,{issuer:'https://identity.example.invalid',subject:'example-user',issuedAt:Math.floor(Date.now()/1000)},challenge,'clock-in',
+        {shiftId:'shift-a',expectedRevision:1},{earlyWindowMs:3600000,lateWindowMs:3600000});
+      process.stdout.write(result.status); db.close();`;
+    const run = () => new Promise((done, fail) => {
+      const child = spawn(process.execPath, ['--input-type=module', '-e', program, path], { stdio: ['pipe', 'pipe', 'ignore'] });
+      let output = ''; child.stdout.on('data', (chunk) => { output += chunk; });
+      child.on('error', fail); child.stdin.end(challenge);
+      child.on('close', (code) => code === 0 ? done(output) : fail(new Error('Test worker failed')));
+    });
+    const outcomes = await Promise.all([run(), run()]);
+    assert.ok(outcomes.every((outcome) => ['confirmed', 'unresolved'].includes(outcome)));
+    db = new DatabaseSync(path);
+    const replay = submitScheduledAttendance(db, identity('example-user'), challenge, 'clock-in', { shiftId: 'shift-a', expectedRevision: 1 }, policy);
+    assert.equal(replay.status, 'confirmed');
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM history').get().n, 1);
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM scheduled_attendance_events').get().n, 1);
+  } finally {
+    if (db?.isOpen) db.close();
+    if (!resolve(temp).startsWith(resolve(prefix))) throw new Error('Unexpected temporary path');
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
 
 test('lost replies can be recovered by the same authorized staff without creating duplicate attendance', async (t) => {
   const prefix = join(tmpdir(), 'vintage-receipt-'), temp = mkdtempSync(prefix);
