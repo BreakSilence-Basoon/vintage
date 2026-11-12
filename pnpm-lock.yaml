@@ -51,6 +51,8 @@ importers:
         specifier: 6.2.17
         version: 6.2.17
 
+  packages/ledger-evidence-vault: {}
+
   packages/ledger-facts: {}
 
   packages/ledger-store:
