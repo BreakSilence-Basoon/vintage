@@ -34,6 +34,12 @@ importers:
 
   packages/ledger-facts: {}
 
+  packages/ledger-store:
+    dependencies:
+      '@vintage/ledger-facts':
+        specifier: workspace:*
+        version: link:../ledger-facts
+
   packages/oidc-login:
     dependencies:
       openid-client:
