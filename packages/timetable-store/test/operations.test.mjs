@@ -1,16 +1,74 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { initializeTimetableStore, createTimetableStore } from '../src/index.mjs';
-import { applyLocalOperation, migrateWithBackup } from '../src/operations.mjs';
+import { applyLocalOperation, migrateWithBackup, migrateAllWithBackups } from '../src/operations.mjs';
 import { copyTimetableDatabase } from '../src/backup.mjs';
 
 const issuer = 'https://identity.example.invalid';
 const person = { issuer, subject: 'example-viewer', businessId: 'shop-a', staffId: 'staff-a' };
 const history = { businessId: 'shop-a', staffId: 'staff-a', recordId: 'record-a', startsAt: '2026-01-01T09:00:00.000Z', endsAt: null };
+
+test('all migrations preserve a separate verified prior-version backup for every step', async () => {
+  const prefix = join(tmpdir(), 'vintage-all-migrations-'), temp = mkdtempSync(prefix);
+  let db;
+  try {
+    const path = join(temp, 'fixture.sqlite'), backups = join(temp, 'backups');
+    mkdirSync(backups);
+    db = new DatabaseSync(path);
+    initializeTimetableStore(db);
+    db.prepare('INSERT INTO businesses (id) VALUES (?)').run('shop-a');
+    db.close();
+    await migrateAllWithBackups(path, backups);
+    db = new DatabaseSync(path, { readOnly: true });
+    assert.equal(db.prepare('PRAGMA user_version').get().user_version, 14);
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM businesses').get().n, 1);
+    db.close();
+    for (let version = 1; version < 14; version++) {
+      const backup = new DatabaseSync(join(backups, `timetable-before-v${version}.sqlite`), { readOnly: true });
+      try {
+        assert.equal(backup.prepare('PRAGMA user_version').get().user_version, version);
+        assert.equal(backup.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
+        assert.equal(backup.prepare('SELECT COUNT(*) AS n FROM businesses').get().n, 1);
+      } finally { backup.close(); }
+    }
+    await migrateAllWithBackups(path, backups); // Already current; no backups are overwritten.
+  } finally {
+    if (db?.isOpen) db.close();
+    if (!resolve(temp).startsWith(resolve(prefix))) throw new Error('Unexpected temporary path');
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test('a later backup collision stops without overwriting and can resume in a new directory', async () => {
+  const prefix = join(tmpdir(), 'vintage-all-partial-'), temp = mkdtempSync(prefix);
+  let db;
+  try {
+    const path = join(temp, 'fixture.sqlite'), backups = join(temp, 'backups'), retry = join(temp, 'retry');
+    mkdirSync(backups); mkdirSync(retry);
+    const collision = join(backups, 'timetable-before-v3.sqlite');
+    writeFileSync(collision, 'existing synthetic file');
+    db = new DatabaseSync(path); initializeTimetableStore(db); db.close();
+    await assert.rejects(migrateAllWithBackups(path, backups));
+    assert.equal(readFileSync(collision, 'utf8'), 'existing synthetic file');
+    db = new DatabaseSync(path, { readOnly: true });
+    assert.equal(db.prepare('PRAGMA user_version').get().user_version, 3);
+    db.close();
+    await assert.rejects(migrateWithBackup(path, join(retry, 'wrong-version.sqlite'), 2));
+    await migrateAllWithBackups(path, retry);
+    db = new DatabaseSync(path, { readOnly: true });
+    assert.equal(db.prepare('PRAGMA user_version').get().user_version, 14);
+    const backup = new DatabaseSync(join(retry, 'timetable-before-v3.sqlite'), { readOnly: true });
+    try { assert.equal(backup.prepare('PRAGMA user_version').get().user_version, 3); } finally { backup.close(); }
+  } finally {
+    if (db?.isOpen) db.close();
+    if (!resolve(temp).startsWith(resolve(prefix))) throw new Error('Unexpected temporary path');
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
 
 test('migration backs up old data before transactional operations and audit', async () => {
   const prefix = join(tmpdir(), 'vintage-operations-');
@@ -100,6 +158,8 @@ test('migration does not begin while another writer holds the database', async (
     initializeTimetableStore(db);
     db.exec('BEGIN IMMEDIATE');
     await assert.rejects(migrateWithBackup(path, backup));
+    await assert.rejects(migrateAllWithBackups(path, temp));
+    assert.equal(existsSync(join(temp, 'timetable-before-v1.sqlite')), false);
     db.exec('ROLLBACK');
     assert.equal(db.prepare('PRAGMA user_version').get().user_version, 1);
   } finally {

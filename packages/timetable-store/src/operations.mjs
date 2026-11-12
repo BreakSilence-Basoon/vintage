@@ -1,5 +1,5 @@
 import { lstatSync } from 'node:fs';
-import { isAbsolute } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { copyTimetableDatabase } from './backup.mjs';
 import { createTimetableStore } from './index.mjs';
@@ -22,7 +22,7 @@ function openExisting(path) {
 }
 
 // A backup is created while a write lock prevents changes between copy and migration.
-export async function migrateWithBackup(path, backupPath) {
+export async function migrateWithBackup(path, backupPath, expectedVersion) {
   const db = openExisting(path);
   try {
     db.exec('PRAGMA foreign_keys = ON');
@@ -30,6 +30,7 @@ export async function migrateWithBackup(path, backupPath) {
     try {
       const version = db.prepare('PRAGMA user_version').get().user_version;
       if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13].includes(version)) throw new Error('Unsupported migration');
+      if (expectedVersion !== undefined && version !== expectedVersion) throw new Error('Database version changed');
       createTimetableStore(db);
       await copyTimetableDatabase(path, backupPath);
       if (version === 1) db.exec(`CREATE TABLE audit_events (
@@ -139,6 +140,22 @@ export async function migrateWithBackup(path, backupPath) {
       db.exec('COMMIT');
     } catch (error) { db.exec('ROLLBACK'); throw error; }
   } finally { db.close(); }
+}
+
+// Run only while the service and all other writers are stopped. Each committed step has its own backup.
+export async function migrateAllWithBackups(path, backupDirectory) {
+  if (!isAbsolute(backupDirectory ?? '') || !lstatSync(backupDirectory).isDirectory()) throw new Error('Existing backup directory required');
+  const db = openExisting(path);
+  let version;
+  try {
+    createTimetableStore(db);
+    version = db.prepare('PRAGMA user_version').get().user_version;
+  } finally { db.close(); }
+  if (!Number.isInteger(version) || version < 1 || version > 14) throw new Error('Unsupported migration');
+  while (version < 14) {
+    await migrateWithBackup(path, join(backupDirectory, `timetable-before-v${version}.sqlite`), version);
+    version += 1;
+  }
 }
 
 export function applyLocalOperation(path, operation, input) {
