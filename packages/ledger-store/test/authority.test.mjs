@@ -174,6 +174,28 @@ test('a revoked read grant is rechecked in the read transaction', async () => {
   }
 });
 
+test('history requires its own scope and rechecks a revoked grant in the read transaction', async () => {
+  const prefix = join(tmpdir(), 'vintage-ledger-history-revoke-'), temp = mkdtempSync(prefix), path = join(temp, 'fixture.sqlite');
+  let db, revoker;
+  try {
+    db = new DatabaseSync(path); initializeLedgerStore(db); writeLedgerFact(db, { ...request, actorId: grant.actorId });
+    initializeLedgerAuthority(db, 'example-shop'); setLedgerGrant(db, grant); revoker = new DatabaseSync(path);
+    const store = createLedgerAuthorizedStore(db, { ...config, historyScope: 'ledger:history' }), exec = db.exec.bind(db);
+    await assert.rejects(store.history(await token(), { id: fact.id }));
+    assert.throws(() => createLedgerAuthorizedStore(db, { ...config, historyScope: config.readScope }));
+    assert.throws(() => createLedgerAuthorizedStore(db, { ...config, historyScope: config.writeScope }));
+    let injected = false;
+    db.exec = (sql) => { if (sql === 'BEGIN' && !injected) { injected = true; setLedgerGrant(revoker, { ...grant, active: false }); } return exec(sql); };
+    try { await assert.rejects(store.history(await token({ scope: 'ledger:read ledger:history' }), { id: fact.id })); } finally { db.exec = exec; }
+    assert.equal(injected, true);
+  } finally {
+    if (revoker?.isOpen) revoker.close();
+    if (db?.isOpen) db.close();
+    if (!resolve(temp).startsWith(resolve(prefix))) throw new Error('Unexpected temporary path');
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
 test('a revoked grant is rechecked before listing records', async () => {
   const prefix = join(tmpdir(), 'vintage-ledger-list-revoke-'), temp = mkdtempSync(prefix), path = join(temp, 'fixture.sqlite');
   let db, revoker;

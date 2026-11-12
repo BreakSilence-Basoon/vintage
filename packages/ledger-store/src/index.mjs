@@ -91,6 +91,9 @@ export function readLedgerFact(db, id) {
 // Server configuration and key resolver are trusted. The database is the grant source.
 export function createLedgerAuthorizedStore(db, options) {
   const check = createLedgerAccessCheck({ ...options, lookupMembership: async (identity) => lookupLedgerGrant(db, identity) });
+  if (options.historyScope !== undefined && (options.historyScope === options.readScope || options.historyScope === options.writeScope)) throw new Error('Invalid Ledger access configuration');
+  const checkHistory = options.historyScope === undefined ? null : createLedgerAccessCheck({ ...options, readScope: options.historyScope,
+    writeScope: options.readScope, lookupMembership: async (identity) => lookupLedgerGrant(db, identity) });
   function recheck(identity, action) {
     const member = lookupLedgerGrant(db, identity);
     if (!member || member.actorId !== identity.actorId || member.businessId !== identity.businessId || !member.active || !member.read ||
@@ -129,6 +132,33 @@ export function createLedgerAuthorizedStore(db, options) {
         requireSupported(db, true);
         recheck(identity, 'read');
         const result = listLedgerFactsInTransaction(db, query);
+        db.exec('COMMIT'); begun = false;
+        return result;
+      } catch {
+        if (begun) { try { db.exec('ROLLBACK'); } catch { if (db.isTransaction) { try { db.close(); } catch {} } } }
+        throw new Error('Ledger access failed');
+      }
+    },
+    async history(authorization, query) {
+      if (!checkHistory) throw new Error('Ledger access failed');
+      const identity = await check(authorization, 'read');
+      const historyIdentity = await checkHistory(authorization, 'read');
+      if (!identity || !historyIdentity || identity.issuer !== historyIdentity.issuer || identity.subject !== historyIdentity.subject ||
+          identity.actorId !== historyIdentity.actorId || !query || typeof query !== 'object' || Array.isArray(query) ||
+          Object.keys(query).some((key) => !['id','afterRevision','limit'].includes(key)) || !validId(query.id)) throw new Error('Ledger access failed');
+      const after = query.afterRevision ?? 0, limit = query.limit ?? 20;
+      if (!Number.isSafeInteger(after) || after < 0 || !Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error('Ledger access failed');
+      let begun = false;
+      try {
+        db.exec('BEGIN'); begun = true;
+        requireSupported(db, true); recheck(identity, 'read'); recheck(historyIdentity, 'read');
+        const rows = db.prepare('SELECT revision,after_json,recorded_at FROM ledger_operations WHERE fact_id=? AND revision>? ORDER BY revision LIMIT ?').all(query.id, after, limit + 1);
+        const items = rows.slice(0, limit).map((row) => {
+          const fact = validateLedgerFact(JSON.parse(row.after_json));
+          if (fact.id !== query.id || !Number.isSafeInteger(row.revision) || row.revision < 1 || typeof row.recorded_at !== 'string') throw new Error('Invalid history');
+          return { revision: row.revision, fact, recordedAt: row.recorded_at };
+        });
+        const result = { items, nextAfterRevision: rows.length > limit ? items.at(-1).revision : null };
         db.exec('COMMIT'); begun = false;
         return result;
       } catch {

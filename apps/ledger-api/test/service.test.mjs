@@ -59,7 +59,7 @@ test('loopback flow requires a signed token and current grant for create, read, 
     const path = join(temp, 'fixture.sqlite'), keyFile = join(temp, 'keys.json');
     initializeNewLedgerDatabase(path, { businessId: 'example-shop', grant });
     writeFileSync(keyFile, JSON.stringify({ keys: [{ ...await exportJWK(keys.publicKey), kid: 'example-key', alg: 'RS256', use: 'sig' }] }));
-    service = prepareLedgerService(config(path, keyFile, 'true'));
+    service = prepareLedgerService({ ...config(path, keyFile, 'true'), VINTAGE_LEDGER_HISTORY_SCOPE: 'ledger:history' });
     service.server.listen(0, '127.0.0.1'); await once(service.server, 'listening');
     const port = service.server.address().port, valid = await signed();
     const input = { operationId: 'operation-a', expectedRevision: 0, fact };
@@ -69,6 +69,16 @@ test('loopback flow requires a signed token and current grant for create, read, 
     assert.equal((await call(port, '/v1/facts/read', { id: fact.id }, valid)).body.fact.amountMinor, '100');
     const corrected = { operationId: 'operation-b', expectedRevision: 1, fact: { ...fact, amountMinor: '200' } };
     assert.equal((await call(port, '/v1/facts/write', corrected, valid)).body.revision, 2);
+    const historyToken = await signed({ scope: 'ledger:read ledger:history' });
+    assert.equal((await call(port, '/v1/facts/history', { id: fact.id }, valid)).status, 503);
+    assert.equal((await call(port, '/v1/facts/history', { id: fact.id }, await signed({ scope: 'ledger:history' }))).status, 503);
+    const history = await call(port, '/v1/facts/history', { id: fact.id, limit: 1 }, historyToken);
+    assert.equal(history.status, 200); assert.equal(history.headers['cache-control'], 'no-store');
+    assert.equal(history.body.items[0].fact.amountMinor, '100'); assert.equal(history.body.nextAfterRevision, 1);
+    assert.doesNotMatch(JSON.stringify(history.body), /example-actor|operation-a/);
+    const nextHistory = await call(port, '/v1/facts/history', { id: fact.id, afterRevision: 1 }, historyToken);
+    assert.equal(nextHistory.body.items[0].fact.amountMinor, '200'); assert.equal(nextHistory.body.nextAfterRevision, null);
+    assert.equal((await call(port, '/v1/facts/history', { id: fact.id, limit: 101 }, historyToken)).status, 503);
     for (const [id, type, date] of [['example-b','invoice-issued','2026-01-31'], ['example-c','payment-made','2026-01-15'], ['example-d','invoice-issued','2026-02-01']]) {
       const created = { operationId: `create-${id}`, expectedRevision: 0, fact: { ...fact, id, type, date } };
       assert.equal((await call(port, '/v1/facts/write', created, valid)).status, 200);
@@ -111,6 +121,7 @@ test('loopback flow requires a signed token and current grant for create, read, 
     const snapshot = new DatabaseSync(backup, { readOnly: true });
     try { assert.equal(snapshot.prepare('SELECT active FROM ledger_authority_grants').get().active, 1); } finally { snapshot.close(); }
     assert.equal((await call(port, '/v1/facts/read', { id: fact.id }, valid)).status, 503);
+    assert.equal((await call(port, '/v1/facts/history', { id: fact.id }, historyToken)).status, 503);
     assert.equal((await call(port, '/v1/facts/list', { ...filter, cursor: firstPage.body.nextCursor }, valid)).status, 503);
     assert.equal((await call(port, '/v1/facts/write', input, valid)).status, 503);
     assert.equal(service.db.prepare('SELECT COUNT(*) AS n FROM ledger_operations').get().n, 8);
@@ -130,6 +141,7 @@ test('read-only is the default and pending recovery cannot start', async () => {
     writeFileSync(keyFile, JSON.stringify({ keys: [{ ...await exportJWK(keys.publicKey), kid: 'example-key' }] }));
     const env = config(path, keyFile); delete env.VINTAGE_LEDGER_ENABLE_WRITES;
     service = prepareLedgerService(env); service.server.listen(0, '127.0.0.1'); await once(service.server, 'listening');
+    assert.equal((await call(service.server.address().port, '/v1/facts/history', { id: fact.id }, await signed({ scope: 'ledger:read ledger:history' }))).status, 400);
     assert.equal((await call(service.server.address().port, '/v1/facts/write', { operationId: 'operation-a', expectedRevision: 0, fact }, await signed())).status, 403);
     assert.equal((await call(service.server.address().port, '/v1/facts/read', { id: fact.id }, await signed())).status, 404);
     service.server.close(); await once(service.server, 'close'); service.db.close(); service = null;

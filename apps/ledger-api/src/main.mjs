@@ -26,7 +26,7 @@ export function prepareLedgerService(env) {
   const { VINTAGE_LEDGER_DATABASE_FILE: path, VINTAGE_LEDGER_JWKS_FILE: keyFile, VINTAGE_LEDGER_PORT: portText,
     VINTAGE_LEDGER_ISSUER: issuer, VINTAGE_LEDGER_AUDIENCE: audience, VINTAGE_LEDGER_CLIENT_ID: client,
     VINTAGE_LEDGER_BUSINESS_ID: businessId, VINTAGE_LEDGER_READ_SCOPE: readScope, VINTAGE_LEDGER_WRITE_SCOPE: writeScope,
-    VINTAGE_LEDGER_ENABLE_WRITES: writesText } = env;
+    VINTAGE_LEDGER_ENABLE_WRITES: writesText, VINTAGE_LEDGER_HISTORY_SCOPE: historyScope } = env;
   if (!isAbsolute(path ?? '') || !lstatSync(path).isFile() || !/^\d{1,5}$/.test(portText ?? '')) throw new Error('Invalid configuration');
   const port = Number(portText);
   if (port < 1 || port > 65535 || (writesText !== undefined && !['true', 'false'].includes(writesText))) throw new Error('Invalid configuration');
@@ -36,13 +36,13 @@ export function prepareLedgerService(env) {
     verifyStructure(db);
     if (db.prepare('SELECT business_id FROM ledger_authority_config WHERE id=1').get()?.business_id !== businessId) throw new Error('Invalid authority');
     if (db.prepare('PRAGMA user_version').get().user_version === 2 && db.prepare('SELECT status FROM ledger_recovery_guard WHERE id=1').get()?.status !== 'unlocked') throw new Error('Recovery review required');
-    const store = createLedgerAuthorizedStore(db, { issuer, audience, clientIds: [client], keyResolver, businessId, readScope, writeScope });
+    const store = createLedgerAuthorizedStore(db, { issuer, audience, clientIds: [client], keyResolver, businessId, readScope, writeScope, historyScope });
     const server = createServer({ maxHeaderSize: 16384 }, async (request, response) => {
       const reply = (status, body) => { response.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }); response.end(JSON.stringify(body)); };
       try {
         const count = (name) => request.rawHeaders.filter((_, i) => i % 2 === 0 && request.rawHeaders[i].toLowerCase() === name).length;
         const length = request.headers['content-length'], address = server.address();
-        if (request.method !== 'POST' || !['/v1/facts/read', '/v1/facts/list', '/v1/facts/write'].includes(request.url) ||
+        if (request.method !== 'POST' || !['/v1/facts/read', '/v1/facts/list', '/v1/facts/write', ...(historyScope === undefined ? [] : ['/v1/facts/history'])].includes(request.url) ||
             request.headers.host !== `127.0.0.1:${address.port}` || count('host') !== 1 || count('authorization') !== 1 ||
             count('content-type') !== 1 || count('content-length') !== 1 || request.headers.cookie || request.headers.origin ||
             request.headers['transfer-encoding'] || request.headers['content-encoding'] || !/^\d{1,5}$/.test(length ?? '') || Number(length) < 1 || Number(length) > 8192 ||
@@ -58,6 +58,7 @@ export function prepareLedgerService(env) {
         catch { return reply(400, { error: 'invalid_request' }); }
         if (!input || typeof input !== 'object' || Array.isArray(input)) return reply(400, { error: 'invalid_request' });
         try {
+          if (request.url === '/v1/facts/history') return reply(200, await store.history(request.headers.authorization, input));
           if (request.url === '/v1/facts/list') return reply(200, await store.list(request.headers.authorization, input));
           if (request.url === '/v1/facts/read') {
             if (Object.keys(input).length !== 1 || !Object.hasOwn(input, 'id')) return reply(400, { error: 'invalid_request' });
