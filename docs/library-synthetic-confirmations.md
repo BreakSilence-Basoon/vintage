@@ -24,6 +24,8 @@ location.assign(`/confirmations/${encodeURIComponent(proposal.proposalId)}`);
 
 첨부 정리 예시는 다른 문서와 회의에서 공유할 수 없는 별도 합성 파일만 사용합니다. 같은 세션에서 `single`과 `reserve`를 적용한 뒤 아래 코드를 실행하고, 위 확인 코드에서 차례로 `isolated-attach`, `delete`, `cleanup`을 실행합니다. 문서 삭제 전에 정리를 시도하면 거부됩니다. 일반 합성 파일은 정리하지 않으며 파일의 합성 내용도 지우지 않습니다.
 
+별도 합성 파일과 합성 회의 보정 파일의 주소로 로그인하면 같은 주소로 돌아갑니다. 로그인만으로 이전 세션의 파일이나 문서가 복구되는 것은 아니며, 복구 정보가 없는 파일은 찾을 수 없습니다.
+
 ```js
 const upload = await fetch('/api/fixture/ir-exclusive-upload', {
   method: 'POST',

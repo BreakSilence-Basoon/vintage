@@ -16,6 +16,16 @@ test('isolated synthetic cleanup preserves file bytes and leaves other files ava
     let ready = false; for (let i = 0; i < 120; i++) { try { if ((await fetch(`${origin}/sign-in`)).ok) { ready = true; break; } } catch {} await delay(250); } assert.ok(ready);
     browser = await chromium.launch({ channel: 'chrome', headless: true, args: ['--no-sandbox'] });
     for (const width of [1440, 390]) {
+      for (const objectId of ['00000000-0000-4000-8000-000000000011', '00000000-0000-4000-8000-000000000108']) {
+        const loginContext = await browser.newContext({ viewport: { width, height: 844 } });
+        try {
+          const loginPage = await loginContext.newPage();
+          await loginPage.goto(`${origin}/objects/${objectId}`);
+          await loginPage.getByRole('button', { name: '회사 계정으로 로그인' }).click();
+          await loginPage.waitForURL(`${origin}/objects/${objectId}`);
+          assert.equal((await loginPage.request.get(`${origin}/objects/${objectId}`)).status(), 404);
+        } finally { await loginContext.close(); }
+      }
       const context = await browser.newContext({ viewport: { width, height: 844 } });
       try {
         const page = await context.newPage(); await page.goto(`${origin}/sign-in`); await page.getByRole('button', { name: '회사 계정으로 로그인' }).click(); await page.waitForURL(`${origin}/`);

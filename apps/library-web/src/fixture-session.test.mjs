@@ -39,6 +39,9 @@ test('fixture login only returns to known fixture paths', () => {
   assert.equal(handleFixtureSession(post('login'), 'login', env, 1000, '/objects/new').headers.get('location'), '/objects/new');
   assert.equal(handleFixtureSession(post('login'), 'login', env, 1000, '/objects/00000000-0000-4000-8000-000000000003').headers.get('location'), '/objects/00000000-0000-4000-8000-000000000003');
   assert.equal(handleFixtureSession(post('login'), 'login', env, 1000, '/objects/00000000-0000-4000-8000-000000000009').headers.get('location'), '/objects/00000000-0000-4000-8000-000000000009');
+  assert.equal(handleFixtureSession(post('login'), 'login', env, 1000, '/objects/00000000-0000-4000-8000-000000000011').headers.get('location'), '/objects/00000000-0000-4000-8000-000000000011');
+  assert.equal(handleFixtureSession(post('login'), 'login', env, 1000, '/objects/00000000-0000-4000-8000-000000000108').headers.get('location'), '/objects/00000000-0000-4000-8000-000000000108');
+  assert.equal(handleFixtureSession(post('login'), 'login', env, 1000, '/objects/00000000-0000-4000-8000-000000000108?next=//example.invalid').headers.get('location'), '/');
   assert.equal(handleFixtureSession(post('login'), 'login', env, 1000, '/objects/unknown').headers.get('location'), '/');
   for (const next of ['/members', '/meetings/00000000-0000-4000-8000-000000000004']) assert.equal(handleFixtureSession(post('login'), 'login', env, 1000, next).headers.get('location'), next);
   assert.equal(handleFixtureSession(post('login'), 'login', env, 1000, '/meetings/unknown').headers.get('location'), '/');
