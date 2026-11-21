@@ -7,7 +7,7 @@
     "dev": "next dev --hostname 127.0.0.1 --port 3828",
     "build": "next build",
     "typecheck": "tsc --noEmit",
-    "test": "node --test src/partner-schedule.test.ts src/partner-fixture.test.ts src/dj-accountant-message.test.ts src/guest-session.test.mjs src/fixture-session.test.mjs src/fixture-collaboration.test.mjs src/fixture-showroom-settlement.test.ts src/bedroom-fixture-reading.test.mjs",
+    "test": "node --test src/partner-schedule.test.ts src/partner-fixture.test.ts src/dj-accountant-message.test.ts src/guest-session.test.mjs src/fixture-session.test.mjs src/fixture-sign-in-notice.test.mjs src/fixture-collaboration.test.mjs src/fixture-showroom-settlement.test.ts src/bedroom-fixture-reading.test.mjs",
     "test:fixture-browser": "node --test --test-concurrency=1 src/partner-fixture-browser.test.mjs src/interaction-keyboard-browser.test.mjs src/collaboration-browser.test.mjs"
   },
   "dependencies": {

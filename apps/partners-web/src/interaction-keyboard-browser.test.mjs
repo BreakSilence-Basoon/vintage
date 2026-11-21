@@ -89,6 +89,10 @@ test('partner ledger and DJ form respond to keyboard input and errors', { timeou
       const page = await context.newPage();
       try {
         await page.addInitScript(() => Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async text => { if (window.failCopy) throw new Error('clipboard unavailable'); window.copiedText = text; } } }));
+        await page.goto(`${origin}/sign-in?error=AccessDenied&next=%2Fdj`);
+        await page.getByText('회사 계정 정보를 확인하지 못했습니다. 다시 로그인해주세요.', { exact: true }).waitFor();
+        await page.waitForFunction(() => !new URL(location.href).searchParams.has('error'));
+        assert.equal(new URL(page.url()).searchParams.get('next'), '/dj');
         await page.goto(`${origin}/accounts`);
         assert.equal(new URL(page.url()).pathname, '/sign-in');
         await page.goto(`${origin}/proj-bedroom/partner-01`);
@@ -101,6 +105,9 @@ test('partner ledger and DJ form respond to keyboard input and errors', { timeou
         await page.waitForURL('**/sign-in?next=%2Fdj');
         await enter(page, page.getByRole('button', { name: '회사 계정으로 로그인' }));
         await page.waitForURL('**/dj');
+        await page.goto(`${origin}/sign-in?mode=cover&mode=other&next=%2Fdj`);
+        await page.getByRole('link', { name: 'Partners로 돌아가기' }).waitFor();
+        await page.goto(`${origin}/dj`);
         await enter(page, page.getByRole('link', { name: 'staff01@example.invalid 로그인 전 화면 보기' }));
         await enter(page, page.getByRole('link', { name: 'Partners로 돌아가기' }));
         await page.waitForURL('**/dj');
